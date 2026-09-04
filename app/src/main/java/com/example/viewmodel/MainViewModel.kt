@@ -53,13 +53,13 @@ data class RemoteFileItem(
 
 data class MainUiState(
     val selectedTab: AppTab = AppTab.OVERVIEW,
-    val selectedHostId: Int = 1,
+    val selectedHostId: Int = -1,
     val showAddHostDialog: Boolean = false,
     val showProvisioningModal: Boolean = false,
     val showRfcDetailModal: RfcItemEntity? = null,
     val showFileTransferModal: Boolean = false,
     val fileTransferDirection: String = "PUSH", // PUSH or PULL
-    val selectedDirectoryPath: String = "/home/andrew",
+    val selectedDirectoryPath: String = "/",
     val fileItems: List<RemoteFileItem> = emptyList(),
     val quickNotice: String? = null
 )
@@ -141,6 +141,19 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
 
     fun selectHost(hostId: Int) {
         _uiState.value = _uiState.value.copy(selectedHostId = hostId)
+    }
+
+    fun deleteHost(host: HostEntity) {
+        viewModelScope.launch {
+            repository.deleteHost(host)
+            if (_uiState.value.selectedHostId == host.id) {
+                val remaining = hostsList.value.filter { it.id != host.id }
+                _uiState.value = _uiState.value.copy(
+                    selectedHostId = remaining.firstOrNull()?.id ?: -1
+                )
+            }
+            showNotice("Host '${host.name}' removed")
+        }
     }
 
     fun setAddHostDialogVisible(visible: Boolean) {

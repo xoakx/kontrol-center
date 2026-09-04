@@ -151,16 +151,67 @@ fun HostsOverviewScreen(
                 )
             }
 
-            items(hosts) { host ->
-                HostSummaryCard(
-                    host = host,
-                    isSelected = host.id == uiState.selectedHostId,
-                    onSelect = { viewModel.selectHost(host.id) },
-                    onOpenProvisioning = {
-                        viewModel.selectHost(host.id)
-                        viewModel.setProvisioningModalVisible(true)
+            if (hosts.isEmpty()) {
+                item {
+                    Card(
+                        shape = RoundedCornerShape(20.dp),
+                        colors = CardDefaults.cardColors(
+                            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+                        ),
+                        border = androidx.compose.foundation.BorderStroke(1.dp, FrostedGlassBorder),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clickable { viewModel.setAddHostDialogVisible(true) }
+                    ) {
+                        Column(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(28.dp),
+                            horizontalAlignment = Alignment.CenterVertically,
+                            verticalArrangement = Arrangement.spacedBy(10.dp)
+                        ) {
+                            Box(
+                                modifier = Modifier
+                                    .size(48.dp)
+                                    .clip(CircleShape)
+                                    .background(MaterialTheme.colorScheme.primary.copy(alpha = 0.15f)),
+                                contentAlignment = Alignment.Center
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Add,
+                                    contentDescription = "Add Host",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(24.dp)
+                                )
+                            }
+                            Text(
+                                text = "No Workstations Configured",
+                                fontSize = 16.sp,
+                                fontWeight = FontWeight.Bold,
+                                color = MaterialTheme.colorScheme.onSurface
+                            )
+                            Text(
+                                text = "Tap here or '+ Add Host' above to connect your Linux workstation in 1 click via SSH.",
+                                fontSize = 12.sp,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                textAlign = androidx.compose.ui.text.style.TextAlign.Center
+                            )
+                        }
                     }
-                )
+                }
+            } else {
+                items(hosts) { host ->
+                    HostSummaryCard(
+                        host = host,
+                        isSelected = host.id == uiState.selectedHostId,
+                        onSelect = { viewModel.selectHost(host.id) },
+                        onOpenProvisioning = {
+                            viewModel.selectHost(host.id)
+                            viewModel.setProvisioningModalVisible(true)
+                        },
+                        onDelete = { viewModel.deleteHost(host) }
+                    )
+                }
             }
 
             // Quick Control Tiles Grid

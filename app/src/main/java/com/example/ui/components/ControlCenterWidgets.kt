@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.filled.DeleteOutline
 import androidx.compose.material.icons.filled.CheckCircle
 import androidx.compose.material.icons.filled.Computer
 import androidx.compose.material.icons.filled.Key
@@ -25,6 +26,7 @@ import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
 import androidx.compose.material3.Icon
+import androidx.compose.material3.IconButton
 import androidx.compose.material3.LinearProgressIndicator
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
@@ -52,7 +54,8 @@ fun HostSummaryCard(
     isSelected: Boolean,
     onSelect: () -> Unit,
     onOpenProvisioning: () -> Unit,
-    modifier: Modifier = Modifier
+    modifier: Modifier = Modifier,
+    onDelete: (() -> Unit)? = null
 ) {
     val borderColor by animateColorAsState(
         targetValue = if (isSelected) MaterialTheme.colorScheme.primary else FrostedGlassBorder,
@@ -126,56 +129,73 @@ fun HostSummaryCard(
                     }
                 }
 
-                // Provision badge
-                if (host.isProvisioned) {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = EmeraldSuccess.copy(alpha = 0.15f),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, EmeraldSuccess.copy(alpha = 0.4f))
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    if (onDelete != null) {
+                        IconButton(
+                            onClick = onDelete,
+                            modifier = Modifier.size(28.dp)
                         ) {
                             Icon(
-                                imageVector = Icons.Default.Key,
-                                contentDescription = "SSH Key Active",
-                                tint = EmeraldSuccess,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "1-Click Key",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = EmeraldSuccess
+                                imageVector = Icons.Default.DeleteOutline,
+                                contentDescription = "Delete Host",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f),
+                                modifier = Modifier.size(18.dp)
                             )
                         }
+                        Spacer(modifier = Modifier.width(6.dp))
                     }
-                } else {
-                    Surface(
-                        shape = RoundedCornerShape(12.dp),
-                        color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
-                        border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
-                        modifier = Modifier.clickable { onOpenProvisioning() }
-                    ) {
-                        Row(
-                            verticalAlignment = Alignment.CenterVertically,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+
+                    // Provision badge
+                    if (host.isProvisioned) {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = EmeraldSuccess.copy(alpha = 0.15f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, EmeraldSuccess.copy(alpha = 0.4f))
                         ) {
-                            Icon(
-                                imageVector = Icons.Default.VpnKey,
-                                contentDescription = "Auto Provision",
-                                tint = MaterialTheme.colorScheme.primary,
-                                modifier = Modifier.size(13.dp)
-                            )
-                            Spacer(modifier = Modifier.width(4.dp))
-                            Text(
-                                text = "Setup Key",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = MaterialTheme.colorScheme.primary
-                            )
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.Key,
+                                    contentDescription = "SSH Key Active",
+                                    tint = EmeraldSuccess,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "1-Click Key",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = EmeraldSuccess
+                                )
+                            }
+                        }
+                    } else {
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = MaterialTheme.colorScheme.primary.copy(alpha = 0.15f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, MaterialTheme.colorScheme.primary.copy(alpha = 0.4f)),
+                            modifier = Modifier.clickable { onOpenProvisioning() }
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
+                            ) {
+                                Icon(
+                                    imageVector = Icons.Default.VpnKey,
+                                    contentDescription = "Auto Provision",
+                                    tint = MaterialTheme.colorScheme.primary,
+                                    modifier = Modifier.size(13.dp)
+                                )
+                                Spacer(modifier = Modifier.width(4.dp))
+                                Text(
+                                    text = "Setup Key",
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = MaterialTheme.colorScheme.primary
+                                )
+                            }
                         }
                     }
                 }

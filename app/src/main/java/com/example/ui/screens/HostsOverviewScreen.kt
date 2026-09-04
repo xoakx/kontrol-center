@@ -167,7 +167,7 @@ fun HostsOverviewScreen(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .padding(28.dp),
-                            horizontalAlignment = Alignment.CenterVertically,
+                            horizontalAlignment = Alignment.CenterHorizontally,
                             verticalArrangement = Arrangement.spacedBy(10.dp)
                         ) {
                             Box(

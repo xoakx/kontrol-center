@@ -318,49 +318,70 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }
     }
 
-    // File Manager
+    // File Manager (SFTP)
     fun loadDirectoryFiles(path: String) {
-        val simulated = when (path) {
-            "/home/andrew" -> listOf(
-                RemoteFileItem("projects", "/home/andrew/projects", "4.2 GB", true, "drwxr-xr-x", "Today 15:30"),
-                RemoteFileItem("Documents", "/home/andrew/Documents", "128 MB", true, "drwxr-xr-x", "Yesterday"),
-                RemoteFileItem("Downloads", "/home/andrew/Downloads", "1.1 GB", true, "drwxr-xr-x", "Aug 28"),
-                RemoteFileItem("docker-compose.yml", "/home/andrew/docker-compose.yml", "2.4 KB", false, "-rw-r--r--", "Aug 29"),
-                RemoteFileItem(".bashrc", "/home/andrew/.bashrc", "3.8 KB", false, "-rw-r--r--", "Aug 15"),
-                RemoteFileItem("host_backup.tar.gz", "/home/andrew/host_backup.tar.gz", "540 MB", false, "-rw-------", "Aug 30")
+        val host = currentHost.value
+        if (host == null) {
+            _uiState.value = _uiState.value.copy(
+                selectedDirectoryPath = path,
+                fileItems = emptyList()
             )
-            "/home/andrew/projects" -> listOf(
-                RemoteFileItem(".. (Parent Directory)", "/home/andrew", "", true, "drwxr-xr-x", ""),
-                RemoteFileItem("ai-studio-agent", "/home/andrew/projects/ai-studio-agent", "240 MB", true, "drwxr-xr-x", "Today 16:45"),
-                RemoteFileItem("pipewire-relay", "/home/andrew/projects/pipewire-relay", "18 MB", true, "drwxr-xr-x", "Today 12:10"),
-                RemoteFileItem("Makefile", "/home/andrew/projects/Makefile", "1.1 KB", false, "-rw-r--r--", "Today 10:00")
-            )
-            else -> listOf(
-                RemoteFileItem(".. (Parent Directory)", "/home/andrew", "", true, "drwxr-xr-x", ""),
-                RemoteFileItem("README.md", "$path/README.md", "850 B", false, "-rw-r--r--", "Today")
-            )
+            return
         }
-        _uiState.value = _uiState.value.copy(
-            selectedDirectoryPath = path,
-            fileItems = simulated
-        )
+
+        viewModelScope.launch {
+            try {
+                val remoteList = SshConnectionManager.listRemoteFiles(host, path)
+                val mapped = remoteList.map { entry ->
+                    val sizeBytes = entry["sizeBytes"] as Long
+                    val formattedSize = when {
+                        sizeBytes > 1024 * 1024 * 1024 -> "%.1f GB".format(sizeBytes / (1024.0 * 1024.0 * 1024.0))
+                        sizeBytes > 1024 * 1024 -> "%.1f MB".format(sizeBytes / (1024.0 * 1024.0))
+                        sizeBytes > 1024 -> "%.1f KB".format(sizeBytes / 1024.0)
+                        else -> "$sizeBytes B"
+                    }
+                    RemoteFileItem(
+                        name = entry["name"] as String,
+                        path = entry["path"] as String,
+                        sizeString = if (entry["isDirectory"] as Boolean) "" else formattedSize,
+                        isDirectory = entry["isDirectory"] as Boolean,
+                        permissions = entry["permissions"] as String,
+                        modifiedTime = entry["modifiedTime"] as String
+                    )
+                }
+
+                val parentItem = if (path != "/" && path.isNotBlank()) {
+                    val parentPath = path.substringBeforeLast("/").ifBlank { "/" }
+                    listOf(RemoteFileItem(".. (Parent Directory)", parentPath, "", true, "drwxr-xr-x", ""))
+                } else emptyList()
+
+                _uiState.value = _uiState.value.copy(
+                    selectedDirectoryPath = path,
+                    fileItems = parentItem + mapped
+                )
+            } catch (e: Exception) {
+                showNotice("SFTP error on $path: ${e.message}")
+            }
+        }
     }
 
     fun uploadSimulatedFile(fileName: String, sizeStr: String) {
+        val host = currentHost.value
         val currentDir = _uiState.value.selectedDirectoryPath
-        val newItem = RemoteFileItem(
-            name = fileName,
-            path = "$currentDir/$fileName",
-            sizeString = sizeStr,
-            isDirectory = false,
-            permissions = "-rw-r--r--",
-            modifiedTime = "Just now"
-        )
-        _uiState.value = _uiState.value.copy(
-            fileItems = listOf(newItem) + _uiState.value.fileItems,
-            showFileTransferModal = false
-        )
-        showNotice("File '$fileName' uploaded to $currentDir via SFTP")
+        if (host != null) {
+            viewModelScope.launch {
+                try {
+                    val dummyContent = "Uploaded via Kontrol Center at ${java.util.Date()}\n"
+                    val inputStream = java.io.ByteArrayInputStream(dummyContent.toByteArray())
+                    SshConnectionManager.uploadFile(host, inputStream, "$currentDir/$fileName".replace("//", "/"))
+                    loadDirectoryFiles(currentDir)
+                    _uiState.value = _uiState.value.copy(showFileTransferModal = false)
+                    showNotice("File '$fileName' uploaded to $currentDir via SFTP")
+                } catch (e: Exception) {
+                    showNotice("Upload failed: ${e.message}")
+                }
+            }
+        }
     }
 
     fun submitAgentPrompt(prompt: String) {

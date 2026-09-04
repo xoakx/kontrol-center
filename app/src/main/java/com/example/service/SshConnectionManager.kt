@@ -173,6 +173,61 @@ object SshConnectionManager {
     }
 
     /**
+     * Lists files and directories on remote host using SFTP.
+     */
+    suspend fun listRemoteFiles(
+        host: HostEntity,
+        directoryPath: String
+    ): List<Map<String, Any>> = withContext(Dispatchers.IO) {
+        val session = getOrCreateSession(host)
+        val channel = session.openChannel("sftp") as com.jcraft.jsch.ChannelSftp
+        channel.connect(10000)
+
+        val resultList = mutableListOf<Map<String, Any>>()
+        try {
+            val vector = channel.ls(directoryPath)
+            for (obj in vector) {
+                if (obj is com.jcraft.jsch.ChannelSftp.LsEntry) {
+                    val name = obj.filename
+                    if (name == "." || name == "..") continue
+                    val attrs = obj.attrs
+                    resultList.add(
+                        mapOf(
+                            "name" to name,
+                            "path" to "$directoryPath/$name".replace("//", "/"),
+                            "isDirectory" to attrs.isDir,
+                            "sizeBytes" to attrs.size,
+                            "permissions" to attrs.permissionsString,
+                            "modifiedTime" to obj.attrs.mtimeString
+                        )
+                    )
+                }
+            }
+        } finally {
+            channel.disconnect()
+        }
+        resultList.sortedWith(compareBy({ !(it["isDirectory"] as Boolean) }, { it["name"] as String }))
+    }
+
+    /**
+     * Uploads an input stream to remote path via SFTP.
+     */
+    suspend fun uploadFile(
+        host: HostEntity,
+        inputStream: InputStream,
+        remotePath: String
+    ) = withContext(Dispatchers.IO) {
+        val session = getOrCreateSession(host)
+        val channel = session.openChannel("sftp") as com.jcraft.jsch.ChannelSftp
+        channel.connect(10000)
+        try {
+            channel.put(inputStream, remotePath, com.jcraft.jsch.ChannelSftp.OVERWRITE)
+        } finally {
+            channel.disconnect()
+        }
+    }
+
+    /**
      * Disconnects and invalidates all cached sessions.
      */
     fun disconnectAll() {

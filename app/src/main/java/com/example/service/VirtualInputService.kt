@@ -26,6 +26,14 @@ enum class VirtualMouseButton(val id: Int, val displayName: String) {
     RIGHT(3, "Right Click")
 }
 
+enum class VirtualSpecialKey(val ydotoolKey: String, val xdotoolKey: String) {
+    ESCAPE("1", "Escape"),
+    SUPER("125", "Super_L"),
+    TAB("15", "Tab"),
+    ENTER("28", "Return"),
+    BACKSPACE("14", "BackSpace")
+}
+
 data class VirtualInputState(
     val isConnected: Boolean = false,
     val isInitialized: Boolean = false,
@@ -185,5 +193,27 @@ class VirtualInputService(
                 Log.e(TAG, "Failed to send text: ${e.message}")
             }
         }
+    }
+
+    /**
+     * Dispatches special keyboard shortcut (ESC, SUPER, TAB, ENTER, BACKSPACE).
+     */
+    fun sendSpecialKey(key: VirtualSpecialKey) {
+        val host = activeHost ?: return
+        scope.launch(ioDispatcher) {
+            val keyArg = when (_state.value.activeBackend) {
+                HidBackendType.WAYLAND_YDOTOOL -> key.ydotoolKey
+                HidBackendType.X11_XDOTEXT -> key.xdotoolKey
+                HidBackendType.SYSFS_UHID -> key.xdotoolKey
+            }
+            sendKeyPress(keyArg)
+        }
+    }
+
+    /**
+     * Alias for typing text on the remote host.
+     */
+    fun sendTextInput(text: String) {
+        sendText(text)
     }
 }

@@ -1,6 +1,8 @@
 package com.example.service
 
+import android.util.Log
 import com.example.BuildConfig
+import com.example.data.entity.HostEntity
 import com.example.data.entity.RfcItemEntity
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
@@ -28,20 +30,23 @@ data class AgentState(
     val isThinking: Boolean = false,
     val chatHistory: List<AgentChatMsg> = emptyList(),
     val suggestedPrompts: List<String> = listOf(
-        "Optimize memory & prune Docker cache",
-        "Harden SSH config (disable root, allow keys only)",
-        "Setup PipeWire audio relay systemd service",
-        "Check disk space bottlenecks and clean logs"
+        "Audit GPU memory and prune VRAM contexts",
+        "Check systemd services and journal logs",
+        "Optimize network buffers and PipeWire audio stream",
+        "Check disk storage bottlenecks on root filesystem"
     )
 )
 
 class AgentRfcEngine {
+    companion object {
+        private const val TAG = "AgentRfcEngine"
+    }
 
     private val _state = MutableStateFlow(AgentState())
     val state = _state.asStateFlow()
 
     private val httpClient = OkHttpClient.Builder()
-        .connectTimeout(30, TimeUnit.SECONDS)
+        .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(30, TimeUnit.SECONDS)
         .build()
 
@@ -50,7 +55,7 @@ class AgentRfcEngine {
             chatHistory = listOf(
                 AgentChatMsg(
                     sender = "AGENT",
-                    text = "Hello! I am your Autonomous System Agent. I can audit server telemetry, diagnose performance, and submit formal RFCs (Requests For Change) for your review and one-tap approval."
+                    text = "Hello! I am your Autonomous Host Engineering Agent. I connect to your local workstation LLM or Gemini API to diagnose system issues, generate formal RFCs, and execute approved changes safely."
                 )
             )
         )
@@ -58,8 +63,7 @@ class AgentRfcEngine {
 
     suspend fun submitUserPrompt(
         prompt: String,
-        hostId: Int,
-        hostName: String,
+        host: HostEntity,
         onRfcGenerated: suspend (RfcItemEntity) -> Unit
     ) {
         val userMsg = AgentChatMsg(sender = "USER", text = prompt)
@@ -68,12 +72,12 @@ class AgentRfcEngine {
             isThinking = true
         )
 
-        val rfc = generateRfcProposal(prompt, hostId, hostName)
+        val rfc = generateRfcProposal(prompt, host)
         onRfcGenerated(rfc)
 
         val agentResponse = AgentChatMsg(
             sender = "AGENT",
-            text = "I have drafted ${rfc.rfcNumber} (${rfc.title}) with ${rfc.impact} impact. Review the proposed shell commands and safety rollback below, then approve to execute.",
+            text = "I have drafted ${rfc.rfcNumber}: '${rfc.title}' with ${rfc.impact} impact. Review the proposed commands below, then approve to execute them directly over SSH.",
             rfcAttachment = rfc
         )
 
@@ -83,99 +87,127 @@ class AgentRfcEngine {
         )
     }
 
+    /**
+     * Executes an approved RFC directly on the remote host via SSH.
+     */
+    suspend fun executeApprovedRfc(
+        rfc: RfcItemEntity,
+        host: HostEntity
+    ): SshCommandResult = withContext(Dispatchers.IO) {
+        val startMsg = AgentChatMsg(
+            sender = "AGENT",
+            text = "Executing ${rfc.rfcNumber} on ${host.name} (${host.address})..."
+        )
+        _state.value = _state.value.copy(
+            chatHistory = _state.value.chatHistory + startMsg,
+            isThinking = true
+        )
+
+        val result = SshConnectionManager.executeCommand(
+            host = host,
+            command = rfc.proposedCommands,
+            timeoutMs = 30000
+        )
+
+        val completionText = if (result.isSuccess) {
+            "✅ ${rfc.rfcNumber} executed successfully (Exit Code 0)!\n\nOutput:\n${result.stdout.trim().ifEmpty { "(Command produced no stdout)" }}"
+        } else {
+            "❌ ${rfc.rfcNumber} execution failed (Exit Code ${result.exitCode}):\n\n${result.stderr.trim().ifEmpty { result.stdout.trim() }}"
+        }
+
+        val finishMsg = AgentChatMsg(
+            sender = "AGENT",
+            text = completionText
+        )
+
+        _state.value = _state.value.copy(
+            chatHistory = _state.value.chatHistory + finishMsg,
+            isThinking = false
+        )
+
+        result
+    }
+
     private suspend fun generateRfcProposal(
         prompt: String,
-        hostId: Int,
-        hostName: String
+        host: HostEntity
     ): RfcItemEntity = withContext(Dispatchers.IO) {
-        val apiKey = try {
-            BuildConfig.GEMINI_API_KEY
-        } catch (e: Exception) {
-            ""
-        }
+        // 1. Try local workstation llama-server (Port 8000 or 8001)
+        val localLlmRfc = callLocalLlmForRfc(prompt, host)
+        if (localLlmRfc != null) return@withContext localLlmRfc
 
-        if (apiKey.isNotEmpty() && apiKey != "MY_GEMINI_API_KEY") {
+        // 2. Try Gemini API if key is available
+        val apiKey = try { BuildConfig.GEMINI_API_KEY } catch (_: Exception) { "" }
+        if (apiKey.isNotBlank() && apiKey != "MY_GEMINI_API_KEY") {
             try {
-                val apiRfc = callGeminiForRfc(prompt, apiKey, hostId)
+                val apiRfc = callGeminiForRfc(prompt, apiKey, host.id)
                 if (apiRfc != null) return@withContext apiRfc
             } catch (e: Exception) {
-                // Graceful fallback to deterministic AI rules
+                Log.w(TAG, "Gemini API error: ${e.message}")
             }
         }
 
-        // Offline / intelligent fallback RFC generation
-        delay(650)
-        val rfcNum = "RFC-${Random.nextInt(50, 99)}"
-        val lower = prompt.lowercase()
+        // 3. Intelligent rule-based fallback
+        generateFallbackRfc(prompt, host.id)
+    }
 
-        when {
-            lower.contains("memory") || lower.contains("ram") || lower.contains("cache") || lower.contains("docker") -> {
-                RfcItemEntity(
-                    hostId = hostId,
-                    rfcNumber = rfcNum,
-                    title = "Memory Defragmentation & Docker Prune Routine",
-                    description = "Clear kernel slab page caches, clean stopped container volumes, and vacuum systemd journal older than 7 days.",
-                    proposedCommands = "sudo sync && sudo sysctl -w vm.drop_caches=3\ndocker system prune -af --volumes\nsudo journalctl --vacuum-time=7d",
-                    rollbackScript = "# Cache dropping is transient and kernel-safe; no rollback required",
-                    impact = "MEDIUM",
-                    status = "PENDING_APPROVAL"
-                )
-            }
-            lower.contains("ssh") || lower.contains("secure") || lower.contains("harden") || lower.contains("root") -> {
-                RfcItemEntity(
-                    hostId = hostId,
-                    rfcNumber = rfcNum,
-                    title = "Harden SSH Daemon & Disable Password Authentication",
-                    description = "Enforce key-only authentication in /etc/ssh/sshd_config.d/99-hardened.conf and set PermitRootLogin no.",
-                    proposedCommands = "sudo tee /etc/ssh/sshd_config.d/99-hardened.conf << 'EOF'\nPasswordAuthentication no\nPermitRootLogin no\nPubkeyAuthentication yes\nEOF\nsudo sshd -t && sudo systemctl restart sshd",
-                    rollbackScript = "sudo rm -f /etc/ssh/sshd_config.d/99-hardened.conf && sudo systemctl restart sshd",
-                    impact = "HIGH",
-                    status = "PENDING_APPROVAL"
-                )
-            }
-            lower.contains("audio") || lower.contains("pipewire") || lower.contains("sound") -> {
-                RfcItemEntity(
-                    hostId = hostId,
-                    rfcNumber = rfcNum,
-                    title = "Provision PipeWire TCP Sound Daemon & Low-Latency Buffer",
-                    description = "Configure PipeWire network module to broadcast 48kHz audio to Android client and open firewall port 4713.",
-                    proposedCommands = "sudo ufw allow 4713/tcp comment 'PipeWire Audio Relay'\nsudo systemctl restart pipewire-pulse",
-                    rollbackScript = "sudo ufw delete allow 4713/tcp\nsudo systemctl restart pipewire",
-                    impact = "LOW",
-                    status = "PENDING_APPROVAL"
-                )
-            }
-            lower.contains("firewall") || lower.contains("ufw") || lower.contains("port") -> {
-                RfcItemEntity(
-                    hostId = hostId,
-                    rfcNumber = rfcNum,
-                    title = "Configure UFW Rules for Host Manager Companion Ports",
-                    description = "Allow ports 22 (SSH), 9090 (Cockpit), 4713 (Audio Relay), and 5900 (VNC) from local subnet.",
-                    proposedCommands = "sudo ufw allow from 192.168.1.0/24 to any port 22 proto tcp\nsudo ufw allow from 192.168.1.0/24 to any port 9090 proto tcp\nsudo ufw allow from 192.168.1.0/24 to any port 4713 proto tcp\nsudo ufw allow from 192.168.1.0/24 to any port 5900 proto tcp\nsudo ufw reload",
-                    rollbackScript = "sudo ufw default deny incoming && sudo ufw reload",
-                    impact = "MEDIUM",
-                    status = "PENDING_APPROVAL"
-                )
-            }
-            else -> {
-                RfcItemEntity(
-                    hostId = hostId,
-                    rfcNumber = rfcNum,
-                    title = "Automated System Action: $prompt",
-                    description = "AI Agent verified system dependencies for prompt: '$prompt'. Verified safe execution constraints.",
-                    proposedCommands = "sudo apt-get update -qq\necho 'Running validated task: $prompt'\nsystemctl list-units --type=service --state=running | head -n 10",
-                    rollbackScript = "# No destructive configuration committed",
-                    impact = "LOW",
-                    status = "PENDING_APPROVAL"
-                )
+    private fun callLocalLlmForRfc(prompt: String, host: HostEntity): RfcItemEntity? {
+        val candidatePorts = listOf(8000, 8001)
+        val systemPrompt = "You are an autonomous Linux SRE agent. Given a user task, output JSON with fields: 'title', 'description', 'proposedCommands', 'rollbackScript', 'impact' (LOW, MEDIUM, HIGH)."
+
+        for (port in candidatePorts) {
+            try {
+                val url = "http://${host.address}:$port/v1/chat/completions"
+                val jsonPayload = JSONObject().apply {
+                    put("model", "qwen")
+                    put("messages", JSONArray().apply {
+                        put(JSONObject().apply {
+                            put("role", "system")
+                            put("content", systemPrompt)
+                        })
+                        put(JSONObject().apply {
+                            put("role", "user")
+                            put("content", prompt)
+                        })
+                    })
+                    put("temperature", 0.3)
+                    put("max_tokens", 512)
+                }
+
+                val request = Request.Builder()
+                    .url(url)
+                    .post(jsonPayload.toString().toRequestBody("application/json".toMediaType()))
+                    .build()
+
+                val response = httpClient.newCall(request).execute()
+                if (response.isSuccessful) {
+                    val body = response.body?.string() ?: continue
+                    val root = JSONObject(body)
+                    val content = root.getJSONArray("choices").getJSONObject(0).getJSONObject("message").getString("content")
+                    val cleaned = content.substringAfter("{").substringBeforeLast("}")
+                    val parsed = JSONObject("{$cleaned}")
+
+                    return RfcItemEntity(
+                        hostId = host.id,
+                        rfcNumber = "RFC-${Random.nextInt(100, 999)}",
+                        title = parsed.optString("title", "Local LLM System Change"),
+                        description = parsed.optString("description", "Generated via Workstation Local Qwen LLM"),
+                        proposedCommands = parsed.optString("proposedCommands", "uptime"),
+                        rollbackScript = parsed.optString("rollbackScript", "# No rollback"),
+                        impact = parsed.optString("impact", "LOW"),
+                        status = "PENDING_APPROVAL"
+                    )
+                }
+            } catch (_: Exception) {
+                // Try next port or fallback
             }
         }
+        return null
     }
 
     private fun callGeminiForRfc(prompt: String, apiKey: String, hostId: Int): RfcItemEntity? {
-        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent?key=$apiKey"
-
-        val systemPrompt = "You are an autonomous Linux server administration agent. When the user requests a server change or problem fix, respond strictly in JSON with fields: 'title', 'description', 'proposedCommands', 'rollbackScript', 'impact' (LOW, MEDIUM, HIGH, or CRITICAL)."
+        val url = "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key=$apiKey"
+        val systemPrompt = "You are an autonomous Linux server administration agent. When the user requests a server change or problem fix, respond strictly in JSON with fields: 'title', 'description', 'proposedCommands', 'rollbackScript', 'impact' (LOW, MEDIUM, HIGH)."
 
         val requestJson = JSONObject().apply {
             put("contents", JSONArray().apply {
@@ -201,7 +233,6 @@ class AgentRfcEngine {
         val candidate = rootJson.getJSONArray("candidates").getJSONObject(0)
         val text = candidate.getJSONObject("content").getJSONArray("parts").getJSONObject(0).getString("text")
 
-        // Parse JSON from text
         val cleaned = text.substringAfter("{").substringBeforeLast("}")
         val parsed = JSONObject("{$cleaned}")
 
@@ -215,5 +246,49 @@ class AgentRfcEngine {
             impact = parsed.optString("impact", "LOW"),
             status = "PENDING_APPROVAL"
         )
+    }
+
+    private fun generateFallbackRfc(prompt: String, hostId: Int): RfcItemEntity {
+        val rfcNum = "RFC-${Random.nextInt(50, 99)}"
+        val lower = prompt.lowercase()
+
+        return when {
+            lower.contains("memory") || lower.contains("ram") || lower.contains("cache") -> {
+                RfcItemEntity(
+                    hostId = hostId,
+                    rfcNumber = rfcNum,
+                    title = "System Memory Defragmentation & Page Cache Drop",
+                    description = "Flush file system buffers and drop clean page caches, dentries and inodes.",
+                    proposedCommands = "sudo sync && echo 3 | sudo tee /proc/sys/vm/drop_caches && free -h",
+                    rollbackScript = "# Transient kernel cache drop; no rollback needed",
+                    impact = "LOW",
+                    status = "PENDING_APPROVAL"
+                )
+            }
+            lower.contains("gpu") || lower.contains("nvidia") || lower.contains("vram") -> {
+                RfcItemEntity(
+                    hostId = hostId,
+                    rfcNumber = rfcNum,
+                    title = "Audit NVIDIA GPU Telemetry & VRAM Allocation",
+                    description = "Query active GPU compute processes, power usage, and memory headroom.",
+                    proposedCommands = "nvidia-smi --query-gpu=name,temperature.gpu,utilization.gpu,memory.used,memory.total --format=csv",
+                    rollbackScript = "# Read-only query; no rollback needed",
+                    impact = "LOW",
+                    status = "PENDING_APPROVAL"
+                )
+            }
+            else -> {
+                RfcItemEntity(
+                    hostId = hostId,
+                    rfcNumber = rfcNum,
+                    title = "System Inspection & Diagnostics",
+                    description = "Gather system uptime, disk usage, and top resource-consuming processes.",
+                    proposedCommands = "uptime && df -h / && ps aux --sort=-%mem | head -n 10",
+                    rollbackScript = "# Read-only diagnostic task",
+                    impact = "LOW",
+                    status = "PENDING_APPROVAL"
+                )
+            }
+        }
     }
 }

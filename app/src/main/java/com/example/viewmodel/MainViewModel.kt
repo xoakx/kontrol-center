@@ -112,20 +112,23 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
 
     init {
+        screenDisplayEngine.bindInputService(virtualInputService)
         loadDirectoryFiles("/home/andrew")
 
         viewModelScope.launch {
             currentHost.collect { host ->
                 if (host != null) {
                     audioRelayEngine.setTargetHost(host.address, 4713)
-                    val isWayland = host.osType.contains("Wayland", ignoreCase = true)
+                    val isWayland = host.osType.contains("Wayland", ignoreCase = true) || host.osType.contains("KDE", ignoreCase = true)
                     val displayType = if (isWayland) {
                         DisplayServerType.WAYLAND
                     } else {
                         DisplayServerType.X11
                     }
-                    remoteClipboardService.configureTargetHost(host.id, host.address, displayType)
-                    virtualInputService.configureTargetHost(host.address, isWayland)
+                    terminalEngine.attachHost(host)
+                    virtualInputService.attachHost(host, isWayland)
+                    remoteClipboardService.attachHost(host, displayType)
+                    screenDisplayEngine.attachHost(host)
                 }
             }
         }
@@ -202,49 +205,55 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
                 installAudioRelay = installAudioRelay
             )
 
-            // Run remote setup service and provisioning engine in tandem
-            launch {
-                remoteSetupService.executeSetup(setupConfig)
-            }
+            val setupResult = remoteSetupService.executeSetup(setupConfig)
 
-            provisioningEngine.startProvisioning(
-                hostAddress = newHost.address,
-                sshPort = newHost.sshPort,
-                initialUsername = username,
-                installCockpit = installCockpit,
-                installAudioRelay = installAudioRelay
-            )
-
-            val detectedResult = provisioningEngine.state.value.detectedEnvironment
+            val detectedResult = setupResult.detectedServer
             val updatedHost = newHost.copy(
                 id = insertedId,
-                isProvisioned = true,
-                isOnline = true,
-                username = "hostmanager",
-                authType = "SSH_KEY",
-                sshPublicKey = provisioningEngine.state.value.generatedPublicKey,
-                osType = detectedResult?.let { "${it.desktopEnv.label} (${it.displayServer.label})" } ?: "Linux Workstation",
-                vncPort = detectedResult?.defaultPort ?: 3389,
+                isProvisioned = setupResult.isSuccess,
+                isOnline = setupResult.isSuccess,
+                username = username,
+                authType = if (setupResult.privateKeyPem.isNotBlank()) "SSH_KEY" else "PASSWORD",
+                sshPublicKey = setupResult.publicKey,
+                sshPrivateKey = setupResult.privateKeyPem,
+                osType = "${setupResult.detectedDesktop.label} (${setupResult.detectedServer.label})",
+                vncPort = setupResult.remoteDesktopPort,
                 cockpitPort = if (installCockpit) 9090 else 0
             )
             repository.updateHost(updatedHost)
-            repository.updateProvisioned(insertedId, true)
-            showNotice("Host '$name' provisioned successfully! 1-Click SSH key active on port ${updatedHost.vncPort}.")
+            repository.updateProvisioned(insertedId, setupResult.isSuccess)
+            if (setupResult.isSuccess) {
+                terminalEngine.attachHost(updatedHost)
+                showNotice("Host '$name' provisioned successfully! 1-Click SSH key active on port ${updatedHost.vncPort}.")
+            } else {
+                showNotice("Host setup warning: ${setupResult.errorMessage ?: "Check credentials"}")
+            }
         }
     }
 
     // RFC Approval / Execution
     fun approveAndExecuteRfc(rfc: RfcItemEntity) {
         viewModelScope.launch {
-            repository.updateRfcStatus(
-                rfcId = rfc.id,
-                status = "EXECUTED",
-                log = "[COMMANDS EXECUTED VIA SSH]\n${rfc.proposedCommands}\n--> Exit code: 0\n--> Applied successfully at ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}",
-                executedAt = System.currentTimeMillis()
-            )
-            terminalEngine.executeCommand(rfc.proposedCommands.lines().firstOrNull() ?: "echo 'RFC Applied'")
-            setRfcDetailModal(null)
-            showNotice("${rfc.rfcNumber} Approved & Executed!")
+            val host = currentHost.value
+            if (host != null) {
+                showNotice("Executing ${rfc.rfcNumber} on ${host.address}...")
+                val result = agentRfcEngine.executeApprovedRfc(rfc, host)
+                val status = if (result.isSuccess) "EXECUTED" else "FAILED"
+                repository.updateRfcStatus(
+                    rfcId = rfc.id,
+                    status = status,
+                    log = if (result.isSuccess) {
+                        "[SSH EXECUTION SUCCESS]\n${result.stdout.trim()}"
+                    } else {
+                        "[SSH EXECUTION FAILED]\n${result.stderr.trim().ifEmpty { result.stdout.trim() }}"
+                    },
+                    executedAt = System.currentTimeMillis()
+                )
+                setRfcDetailModal(null)
+                showNotice(if (result.isSuccess) "${rfc.rfcNumber} Executed Successfully!" else "${rfc.rfcNumber} Failed (Exit code ${result.exitCode})")
+            } else {
+                showNotice("Error: No target host selected for RFC execution.")
+            }
         }
     }
 
@@ -359,8 +368,7 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         viewModelScope.launch {
             agentRfcEngine.submitUserPrompt(
                 prompt = prompt,
-                hostId = host.id,
-                hostName = host.name,
+                host = host,
                 onRfcGenerated = { rfc ->
                     repository.insertRfc(rfc)
                 }

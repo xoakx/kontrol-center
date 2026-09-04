@@ -191,13 +191,10 @@ class AudioStreamService(
                     clientSocket = socket
                     inputStream = socket.getInputStream()
                     connectedToSocket = true
-                    _stats.value = _stats.value.copy(
-                        statusMessage = "Live Stream Active: Host PipeWire -> AudioTrack Low-Latency"
-                    )
                 } catch (e: Exception) {
-                    Log.i(TAG, "Host socket not reachable ($hostIp:$hostPort). Switching to real-time low-latency synthesis generator: ${e.message}")
+                    Log.w(TAG, "Host socket not reachable ($hostIp:$hostPort): ${e.message}")
                     _stats.value = _stats.value.copy(
-                        statusMessage = "AudioTrack Active: Low-Latency PCM Stream (48kHz Stereo)"
+                        statusMessage = "Offline: Cannot reach audio socket on $hostIp:$hostPort. Load module-simple-protocol-tcp on host."
                     )
                 }
 
@@ -326,7 +323,17 @@ class AudioStreamService(
             )
 
             var recorder: AudioRecord? = null
+            var socket: Socket? = null
             try {
+                try {
+                    socket = Socket()
+                    socket.connect(InetSocketAddress(hostIp, hostPort), 2000)
+                    socket.tcpNoDelay = true
+                } catch (se: Exception) {
+                    Log.w(TAG, "Cannot connect mic socket to $hostIp:$hostPort: ${se.message}")
+                }
+                val outputStream = socket?.getOutputStream()
+
                 recorder = AudioRecord(
                     MediaRecorder.AudioSource.VOICE_COMMUNICATION,
                     DEFAULT_SAMPLE_RATE,
@@ -341,6 +348,12 @@ class AudioStreamService(
                 while (isActive && _stats.value.isCapturingMic) {
                     val readBytes = recorder.read(buffer, 0, buffer.size)
                     if (readBytes > 0) {
+                        try {
+                            outputStream?.write(buffer, 0, readBytes)
+                        } catch (we: Exception) {
+                            Log.w(TAG, "Socket write error during mic stream: ${we.message}")
+                            break
+                        }
                         val amps = computeVisualizerBands(buffer, readBytes)
                         _stats.value = _stats.value.copy(
                             bytesProcessed = _stats.value.bytesProcessed + readBytes,
@@ -352,6 +365,7 @@ class AudioStreamService(
             } catch (e: Exception) {
                 Log.w(TAG, "AudioRecord mic capture error: ${e.message}")
             } finally {
+                try { socket?.close() } catch (_: Exception) {}
                 try {
                     recorder?.stop()
                     recorder?.release()

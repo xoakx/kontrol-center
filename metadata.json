@@ -1,0 +1,6 @@
+{
+  "name": "Host Manager",
+  "description": "Streamlined remote workstation and server management with one-click SSH provisioning, audio relay, screen monitor, input control, agent RFC approvals, and file sync.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

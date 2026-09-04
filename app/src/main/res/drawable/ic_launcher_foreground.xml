@@ -1,0 +1,66 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Server Stack Top Unit -->
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M28,32 C28,29.8 29.8,28 32,28 L76,28 C78.2,28 80,29.8 80,32 L80,42 C80,44.2 78.2,46 76,46 L32,46 C29.8,46 28,44.2 28,42 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,37 A2,2 0 1,0 38,37 A2,2 0 1,0 34,37 Z" />
+    <path
+        android:fillColor="#4ADE80"
+        android:pathData="M42,37 A2,2 0 1,0 46,37 A2,2 0 1,0 42,37 Z" />
+    <path
+        android:fillColor="#E0F2FE"
+        android:pathData="M56,36 L74,36 L74,38 L56,38 Z" />
+
+    <!-- Server Stack Middle Unit -->
+    <path
+        android:fillColor="#0284C7"
+        android:pathData="M28,49 C28,46.8 29.8,45 32,45 L76,45 C78.2,45 80,46.8 80,49 L80,59 C80,61.2 78.2,63 76,63 L32,63 C29.8,63 28,61.2 28,59 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,54 A2,2 0 1,0 38,54 A2,2 0 1,0 34,54 Z" />
+    <path
+        android:fillColor="#FACC15"
+        android:pathData="M42,54 A2,2 0 1,0 46,54 A2,2 0 1,0 42,54 Z" />
+    <path
+        android:fillColor="#BAE6FD"
+        android:pathData="M56,53 L74,53 L74,55 L56,55 Z" />
+
+    <!-- Server Stack Bottom Unit -->
+    <path
+        android:fillColor="#0369A1"
+        android:pathData="M28,66 C28,63.8 29.8,62 32,62 L76,62 C78.2,62 80,63.8 80,66 L80,76 C80,78.2 78.2,80 76,80 L32,80 C29.8,80 28,78.2 28,76 Z" />
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M34,71 A2,2 0 1,0 38,71 A2,2 0 1,0 34,71 Z" />
+    <path
+        android:fillColor="#38BDF8"
+        android:pathData="M42,71 A2,2 0 1,0 46,71 A2,2 0 1,0 42,71 Z" />
+    <path
+        android:fillColor="#BAE6FD"
+        android:pathData="M56,70 L74,70 L74,72 L56,72 Z" />
+
+    <!-- Pulse Beacon / Connection Indicator Ring -->
+    <path
+        android:strokeColor="#67E8F9"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M54,18 C46,18 38,21 34,25" />
+    <path
+        android:strokeColor="#67E8F9"
+        android:strokeWidth="2.5"
+        android:strokeLineCap="round"
+        android:fillColor="#00000000"
+        android:pathData="M54,18 C62,18 70,21 74,25" />
+    <path
+        android:fillColor="#67E8F9"
+        android:pathData="M54,19 A3,3 0 1,0 54,25 A3,3 0 1,0 54,19 Z" />
+</vector>
+

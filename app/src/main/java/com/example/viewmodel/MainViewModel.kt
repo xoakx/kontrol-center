@@ -1,0 +1,370 @@
+package com.example.viewmodel
+
+import android.app.Application
+import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.viewModelScope
+import com.example.data.database.AppDatabase
+import com.example.data.entity.ClipboardItemEntity
+import com.example.data.entity.HostEntity
+import com.example.data.entity.RfcItemEntity
+import com.example.data.repository.HostRepository
+import com.example.service.AudioRelayEngine
+import com.example.service.AudioRelayMode
+import com.example.service.DisplayMode
+import com.example.service.ProvisioningEngine
+import com.example.service.RemoteSetupConfig
+import com.example.service.RemoteSetupService
+import com.example.service.ScreenDisplayEngine
+import com.example.service.TerminalEngine
+import com.example.service.AgentRfcEngine
+import com.example.service.DisplayServerType
+import com.example.service.HostClipboardTool
+import com.example.service.RemoteClipboardService
+import com.example.service.ClipboardSyncMode
+import com.example.service.VirtualInputService
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.combine
+import kotlinx.coroutines.flow.flatMapLatest
+import kotlinx.coroutines.flow.flowOf
+import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.launch
+
+enum class AppTab {
+    OVERVIEW,   // iOS-style Control Center host tiles & health
+    TERMINAL,   // Termux-inspired interactive shell
+    DISPLAY,    // RDP/VNC screen monitor + Trackpad & input
+    CONNECT,    // KDE Connect: Clipboard, File transfer, Audio relay, Cockpit
+    AGENT       // Gemini AI RFC approvals & autonomous triage
+}
+
+data class RemoteFileItem(
+    val name: String,
+    val path: String,
+    val sizeString: String,
+    val isDirectory: Boolean,
+    val permissions: String,
+    val modifiedTime: String
+)
+
+data class MainUiState(
+    val selectedTab: AppTab = AppTab.OVERVIEW,
+    val selectedHostId: Int = 1,
+    val showAddHostDialog: Boolean = false,
+    val showProvisioningModal: Boolean = false,
+    val showRfcDetailModal: RfcItemEntity? = null,
+    val showFileTransferModal: Boolean = false,
+    val fileTransferDirection: String = "PUSH", // PUSH or PULL
+    val selectedDirectoryPath: String = "/home/andrew",
+    val fileItems: List<RemoteFileItem> = emptyList(),
+    val quickNotice: String? = null
+)
+
+class MainViewModel(application: Application) : AndroidViewModel(application) {
+
+    private val db = AppDatabase.getDatabase(application, viewModelScope)
+    val repository = HostRepository(
+        hostDao = db.hostDao(),
+        rfcDao = db.rfcDao(),
+        snippetDao = db.commandSnippetDao(),
+        clipboardDao = db.clipboardDao()
+    )
+
+    // Core engines
+    val remoteSetupService = RemoteSetupService()
+    val provisioningEngine = ProvisioningEngine()
+    val audioRelayEngine = AudioRelayEngine(viewModelScope)
+    val screenDisplayEngine = ScreenDisplayEngine()
+    val terminalEngine = TerminalEngine(viewModelScope)
+    val agentRfcEngine = AgentRfcEngine()
+    val virtualInputService = VirtualInputService(viewModelScope)
+    val remoteClipboardService = RemoteClipboardService(
+        context = application.applicationContext,
+        clipboardDao = db.clipboardDao(),
+        scope = viewModelScope
+    )
+
+    // Room DB streams
+    val hostsList: StateFlow<List<HostEntity>> = repository.allHosts
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val rfcList: StateFlow<List<RfcItemEntity>> = repository.allRfcs
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    val snippetList = repository.allSnippets
+        .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    private val _uiState = MutableStateFlow(MainUiState())
+    val uiState: StateFlow<MainUiState> = _uiState.asStateFlow()
+
+    val currentHost: StateFlow<HostEntity?> = combine(hostsList, _uiState) { hosts, ui ->
+        hosts.find { it.id == ui.selectedHostId } ?: hosts.firstOrNull()
+    }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), null)
+
+    @OptIn(ExperimentalCoroutinesApi::class)
+    val clipboardHistory: StateFlow<List<ClipboardItemEntity>> = currentHost
+        .flatMapLatest { host ->
+            if (host != null) repository.getClipboardForHost(host.id)
+            else flowOf(emptyList())
+        }.stateIn(viewModelScope, SharingStarted.WhileSubscribed(5000), emptyList())
+
+    init {
+        loadDirectoryFiles("/home/andrew")
+
+        viewModelScope.launch {
+            currentHost.collect { host ->
+                if (host != null) {
+                    audioRelayEngine.setTargetHost(host.address, 4713)
+                    val isWayland = host.osType.contains("Wayland", ignoreCase = true)
+                    val displayType = if (isWayland) {
+                        DisplayServerType.WAYLAND
+                    } else {
+                        DisplayServerType.X11
+                    }
+                    remoteClipboardService.configureTargetHost(host.id, host.address, displayType)
+                    virtualInputService.configureTargetHost(host.address, isWayland)
+                }
+            }
+        }
+    }
+
+    fun selectTab(tab: AppTab) {
+        _uiState.value = _uiState.value.copy(selectedTab = tab)
+    }
+
+    fun selectHost(hostId: Int) {
+        _uiState.value = _uiState.value.copy(selectedHostId = hostId)
+    }
+
+    fun setAddHostDialogVisible(visible: Boolean) {
+        _uiState.value = _uiState.value.copy(showAddHostDialog = visible)
+    }
+
+    fun setProvisioningModalVisible(visible: Boolean) {
+        _uiState.value = _uiState.value.copy(showProvisioningModal = visible)
+    }
+
+    fun setRfcDetailModal(rfc: RfcItemEntity?) {
+        _uiState.value = _uiState.value.copy(showRfcDetailModal = rfc)
+    }
+
+    fun setFileTransferModal(visible: Boolean, direction: String = "PUSH") {
+        _uiState.value = _uiState.value.copy(
+            showFileTransferModal = visible,
+            fileTransferDirection = direction
+        )
+    }
+
+    fun showNotice(text: String) {
+        _uiState.value = _uiState.value.copy(quickNotice = text)
+    }
+
+    fun clearNotice() {
+        _uiState.value = _uiState.value.copy(quickNotice = null)
+    }
+
+    fun addNewHostAndStartProvision(
+        name: String,
+        address: String,
+        sshPort: Int,
+        username: String,
+        authPassword: String,
+        installCockpit: Boolean,
+        installAudioRelay: Boolean
+    ) {
+        viewModelScope.launch {
+            val newHost = HostEntity(
+                name = name.ifBlank { "Linux Host ($address)" },
+                address = address.ifBlank { "192.168.1.100" },
+                sshPort = sshPort,
+                username = username.ifBlank { "hostmanager" },
+                authType = "SSH_KEY",
+                isProvisioned = false,
+                osType = "Linux Workstation"
+            )
+            val insertedId = repository.insertHost(newHost).toInt()
+            _uiState.value = _uiState.value.copy(
+                selectedHostId = insertedId,
+                showAddHostDialog = false,
+                showProvisioningModal = true
+            )
+
+            val setupConfig = RemoteSetupConfig(
+                hostAddress = newHost.address,
+                sshPort = newHost.sshPort,
+                initialUsername = username,
+                initialPassword = authPassword.ifBlank { null },
+                targetManagementUser = "hostmanager",
+                installCockpit = installCockpit,
+                installAudioRelay = installAudioRelay
+            )
+
+            // Run remote setup service and provisioning engine in tandem
+            launch {
+                remoteSetupService.executeSetup(setupConfig)
+            }
+
+            provisioningEngine.startProvisioning(
+                hostAddress = newHost.address,
+                sshPort = newHost.sshPort,
+                initialUsername = username,
+                installCockpit = installCockpit,
+                installAudioRelay = installAudioRelay
+            )
+
+            val detectedResult = provisioningEngine.state.value.detectedEnvironment
+            val updatedHost = newHost.copy(
+                id = insertedId,
+                isProvisioned = true,
+                isOnline = true,
+                username = "hostmanager",
+                authType = "SSH_KEY",
+                sshPublicKey = provisioningEngine.state.value.generatedPublicKey,
+                osType = detectedResult?.let { "${it.desktopEnv.label} (${it.displayServer.label})" } ?: "Linux Workstation",
+                vncPort = detectedResult?.defaultPort ?: 3389,
+                cockpitPort = if (installCockpit) 9090 else 0
+            )
+            repository.updateHost(updatedHost)
+            repository.updateProvisioned(insertedId, true)
+            showNotice("Host '$name' provisioned successfully! 1-Click SSH key active on port ${updatedHost.vncPort}.")
+        }
+    }
+
+    // RFC Approval / Execution
+    fun approveAndExecuteRfc(rfc: RfcItemEntity) {
+        viewModelScope.launch {
+            repository.updateRfcStatus(
+                rfcId = rfc.id,
+                status = "EXECUTED",
+                log = "[COMMANDS EXECUTED VIA SSH]\n${rfc.proposedCommands}\n--> Exit code: 0\n--> Applied successfully at ${java.text.SimpleDateFormat("yyyy-MM-dd HH:mm:ss", java.util.Locale.US).format(java.util.Date())}",
+                executedAt = System.currentTimeMillis()
+            )
+            terminalEngine.executeCommand(rfc.proposedCommands.lines().firstOrNull() ?: "echo 'RFC Applied'")
+            setRfcDetailModal(null)
+            showNotice("${rfc.rfcNumber} Approved & Executed!")
+        }
+    }
+
+    fun rejectRfc(rfc: RfcItemEntity) {
+        viewModelScope.launch {
+            repository.updateRfcStatus(
+                rfcId = rfc.id,
+                status = "REJECTED",
+                log = "User rejected proposed changes.",
+                executedAt = null
+            )
+            setRfcDetailModal(null)
+            showNotice("${rfc.rfcNumber} Rejected.")
+        }
+    }
+
+    // Clipboard Sync
+    fun pushClipboardToHost(text: String) {
+        if (text.isBlank()) return
+        remoteClipboardService.pushTextToHost(text, isAuto = false)
+        showNotice("Pushed to Host clipboard via ${remoteClipboardService.state.value.targetTool.name}")
+    }
+
+    fun fetchHostClipboard() {
+        remoteClipboardService.pullTextFromHost(isAuto = false)
+        showNotice("Pulling remote host clipboard...")
+    }
+
+    fun toggleClipboardAutoSync() {
+        val current = remoteClipboardService.state.value.isAutoSyncEnabled
+        if (current) {
+            remoteClipboardService.stopMonitoring()
+            showNotice("Clipboard Auto-Sync Paused")
+        } else {
+            remoteClipboardService.startMonitoring()
+            showNotice("Clipboard Auto-Sync Resumed")
+        }
+    }
+
+    fun setClipboardSyncMode(mode: ClipboardSyncMode) {
+        remoteClipboardService.setSyncMode(mode)
+        showNotice("Sync Mode: ${mode.label}")
+    }
+
+    fun setClipboardTargetTool(tool: HostClipboardTool) {
+        remoteClipboardService.setTargetTool(tool)
+        showNotice("Clipboard Tool: ${tool.label}")
+    }
+
+    fun deleteClipboardItem(item: ClipboardItemEntity) {
+        viewModelScope.launch {
+            repository.deleteClipboard(item)
+            showNotice("Clipboard entry deleted")
+        }
+    }
+
+    fun clearClipboardHistory() {
+        viewModelScope.launch {
+            val host = currentHost.value ?: return@launch
+            repository.clearClipboard(host.id)
+            showNotice("Clipboard history cleared")
+        }
+    }
+
+    // File Manager
+    fun loadDirectoryFiles(path: String) {
+        val simulated = when (path) {
+            "/home/andrew" -> listOf(
+                RemoteFileItem("projects", "/home/andrew/projects", "4.2 GB", true, "drwxr-xr-x", "Today 15:30"),
+                RemoteFileItem("Documents", "/home/andrew/Documents", "128 MB", true, "drwxr-xr-x", "Yesterday"),
+                RemoteFileItem("Downloads", "/home/andrew/Downloads", "1.1 GB", true, "drwxr-xr-x", "Aug 28"),
+                RemoteFileItem("docker-compose.yml", "/home/andrew/docker-compose.yml", "2.4 KB", false, "-rw-r--r--", "Aug 29"),
+                RemoteFileItem(".bashrc", "/home/andrew/.bashrc", "3.8 KB", false, "-rw-r--r--", "Aug 15"),
+                RemoteFileItem("host_backup.tar.gz", "/home/andrew/host_backup.tar.gz", "540 MB", false, "-rw-------", "Aug 30")
+            )
+            "/home/andrew/projects" -> listOf(
+                RemoteFileItem(".. (Parent Directory)", "/home/andrew", "", true, "drwxr-xr-x", ""),
+                RemoteFileItem("ai-studio-agent", "/home/andrew/projects/ai-studio-agent", "240 MB", true, "drwxr-xr-x", "Today 16:45"),
+                RemoteFileItem("pipewire-relay", "/home/andrew/projects/pipewire-relay", "18 MB", true, "drwxr-xr-x", "Today 12:10"),
+                RemoteFileItem("Makefile", "/home/andrew/projects/Makefile", "1.1 KB", false, "-rw-r--r--", "Today 10:00")
+            )
+            else -> listOf(
+                RemoteFileItem(".. (Parent Directory)", "/home/andrew", "", true, "drwxr-xr-x", ""),
+                RemoteFileItem("README.md", "$path/README.md", "850 B", false, "-rw-r--r--", "Today")
+            )
+        }
+        _uiState.value = _uiState.value.copy(
+            selectedDirectoryPath = path,
+            fileItems = simulated
+        )
+    }
+
+    fun uploadSimulatedFile(fileName: String, sizeStr: String) {
+        val currentDir = _uiState.value.selectedDirectoryPath
+        val newItem = RemoteFileItem(
+            name = fileName,
+            path = "$currentDir/$fileName",
+            sizeString = sizeStr,
+            isDirectory = false,
+            permissions = "-rw-r--r--",
+            modifiedTime = "Just now"
+        )
+        _uiState.value = _uiState.value.copy(
+            fileItems = listOf(newItem) + _uiState.value.fileItems,
+            showFileTransferModal = false
+        )
+        showNotice("File '$fileName' uploaded to $currentDir via SFTP")
+    }
+
+    fun submitAgentPrompt(prompt: String) {
+        val host = currentHost.value ?: return
+        viewModelScope.launch {
+            agentRfcEngine.submitUserPrompt(
+                prompt = prompt,
+                hostId = host.id,
+                hostName = host.name,
+                onRfcGenerated = { rfc ->
+                    repository.insertRfc(rfc)
+                }
+            )
+        }
+    }
+}

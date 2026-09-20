@@ -46,6 +46,12 @@ interface ArcadeApiService {
     @POST("/api/netsec/crowdsec/unban")
     suspend fun unbanIp(@Body body: UnbanRequest): UnbanResponse
 
+    @GET("/api/netsec/tetragon/status")
+    suspend fun getTetragonStatus(): TetragonStatusResponse
+
+    @GET("/api/netsec/firewall/status")
+    suspend fun getFirewallStatus(): FirewallStatusResponse
+
     @POST("/api/dispatch")
     suspend fun dispatchAction(@Body body: DispatchRequest): DispatchResponse
 

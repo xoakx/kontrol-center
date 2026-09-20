@@ -82,3 +82,44 @@ data class UnbanResponse(
     @Json(name = "output") val output: String = "",
     @Json(name = "message") val message: String? = null
 )
+
+@JsonClass(generateAdapter = true)
+data class TetragonStatusResponse(
+    @Json(name = "status") val status: String = "healthy",
+    @Json(name = "tracing_policies") val tracingPolicies: List<TetragonPolicyItem> = emptyList(),
+    @Json(name = "recent_events") val recentEvents: List<TetragonEventItem> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class TetragonPolicyItem(
+    @Json(name = "name") val name: String,
+    @Json(name = "mode") val mode: String = "monitor_only"
+)
+
+@JsonClass(generateAdapter = true)
+data class TetragonEventItem(
+    @Json(name = "process_kprobe") val processKprobe: TetragonProcessKprobe? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class TetragonProcessKprobe(
+    @Json(name = "binary") val binary: String? = null,
+    @Json(name = "pid") val pid: Long? = null,
+    @Json(name = "function_name") val functionName: String? = null,
+    @Json(name = "action") val action: String? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class FirewallStatusResponse(
+    @Json(name = "status") val status: String = "active",
+    @Json(name = "tableCount") val tableCount: Int = 0,
+    @Json(name = "totalDroppedPackets") val totalDroppedPackets: Long = 0,
+    @Json(name = "dropRules") val dropRules: List<FirewallDropRule> = emptyList()
+)
+
+@JsonClass(generateAdapter = true)
+data class FirewallDropRule(
+    @Json(name = "chain") val chain: String,
+    @Json(name = "packets") val packets: Long = 0
+)
+

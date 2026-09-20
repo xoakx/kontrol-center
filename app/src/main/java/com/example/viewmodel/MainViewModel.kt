@@ -27,6 +27,15 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
+import com.example.data.api.ArcadeApiClient
+import com.example.data.api.ArcadeApiService
+import com.example.data.repository.FleetRepository
+import com.example.data.repository.NetSecRepository
+import com.example.data.repository.RfcRepository
+import com.example.data.repository.SmartHomeRepository
+import com.example.data.repository.TelemetryRepository
+import com.example.service.NetworkMeshManager
+import com.example.service.NetworkMeshManagerImpl
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.flatMapLatest
@@ -39,7 +48,10 @@ enum class AppTab {
     TERMINAL,   // Termux-inspired interactive shell
     DISPLAY,    // RDP/VNC screen monitor + Trackpad & input
     CONNECT,    // KDE Connect: Clipboard, File transfer, Audio relay, Cockpit
-    AGENT       // Gemini AI RFC approvals & autonomous triage
+    AGENT,      // Gemini AI RFC approvals & autonomous triage
+    FLEET,      // 12 Supervised Fleet Daemons drill-down
+    HARDWARE,   // Dual RTX 5060 Ti, Intel Ultra 7 265K, OpenVINO NPU drill-down
+    NETSEC      // Suricata IDS/IPS, CrowdSec LAPI, Tetragon, firewall drill-down
 }
 
 data class RemoteFileItem(
@@ -73,6 +85,40 @@ class MainViewModel(application: Application) : AndroidViewModel(application) {
         snippetDao = db.commandSnippetDao(),
         clipboardDao = db.clipboardDao()
     )
+
+    // Arcade SRE & Host Telemetry Layer
+    val networkMeshManager: NetworkMeshManager = NetworkMeshManagerImpl(scope = viewModelScope)
+
+    val apiService: ArcadeApiService = ArcadeApiClient.create(
+        endpointProvider = {
+            currentHost.value?.let { host ->
+                if (host.activeEndpoint.isNotBlank()) host.activeEndpoint
+                else "http://${host.address}:8899"
+            } ?: "http://100.111.123.93:8899"
+        }
+    )
+
+    val fleetRepository by lazy { FleetRepository(apiService) }
+    val telemetryRepository by lazy { TelemetryRepository(apiService) }
+    val smartHomeRepository by lazy { SmartHomeRepository(apiService) }
+    val netSecRepository by lazy { NetSecRepository(apiService) }
+    val rfcRepository by lazy { RfcRepository(apiService, db.rfcDao()) }
+
+    val fleetViewModel by lazy { FleetViewModel(fleetRepository, viewModelScope) }
+    val hardwareViewModel by lazy { HardwareViewModel(telemetryRepository, smartHomeRepository, viewModelScope) }
+    val netSecViewModel by lazy { NetSecViewModel(netSecRepository, viewModelScope) }
+    val rfcViewModel by lazy { RfcViewModel(rfcRepository = rfcRepository, scope = viewModelScope) }
+
+    val overviewViewModel by lazy {
+        OverviewViewModel(
+            telemetryRepository = telemetryRepository,
+            fleetRepository = fleetRepository,
+            netSecRepository = netSecRepository,
+            hostRepository = repository,
+            networkMeshManager = networkMeshManager,
+            scope = viewModelScope
+        )
+    }
 
     // Core engines
     val remoteSetupService = RemoteSetupService()

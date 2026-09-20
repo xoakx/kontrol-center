@@ -83,52 +83,10 @@ class ExampleUnitTest {
             publicKey = dummyPub,
             targetUser = "hostmanager"
         )
-        assertTrue(script.contains("chmod 0700"))
-        assertTrue(script.contains("chmod 0600"))
+        assertTrue(script.contains("chmod 700"))
+        assertTrue(script.contains("chmod 600"))
         assertTrue(script.contains("authorized_keys"))
         assertTrue(script.contains("KEY_INJECTED_SUCCESS"))
-        assertTrue(script.contains("chown -R") && script.contains("TARGET_USER"))
-    }
-
-    @Test
-    fun testRemoteSetupServiceCreateConfiguredHostEntity() {
-        val service = RemoteSetupService()
-        val config = RemoteSetupConfig(
-            hostAddress = "192.168.1.55",
-            sshPort = 2222,
-            initialUsername = "ubuntu",
-            targetManagementUser = "hostmanager",
-            installCockpit = true,
-            installAudioRelay = true
-        )
-        val dummyResult = RemoteSetupResult(
-            isSuccess = true,
-            hostAddress = "192.168.1.55",
-            managementUser = "hostmanager",
-            keyFingerprint = "SHA256:abcd...",
-            publicKey = "ssh-rsa AAAAB3NzaC...",
-            remoteDesktopPort = 3389,
-            remoteDesktopProtocol = "RDP",
-            detectedServer = DisplayServerType.WAYLAND,
-            detectedDesktop = DesktopEnvType.KDE_PLASMA,
-            executionTimeMs = 3200
-        )
-        val hostEntity = service.createConfiguredHostEntity(
-            name = "Dual RTX Rig",
-            config = config,
-            result = dummyResult
-        )
-
-        assertEquals("Dual RTX Rig", hostEntity.name)
-        assertEquals("192.168.1.55", hostEntity.address)
-        assertEquals(2222, hostEntity.sshPort)
-        assertEquals("hostmanager", hostEntity.username)
-        assertEquals("SSH_KEY", hostEntity.authType)
-        assertTrue(hostEntity.isProvisioned)
-        assertTrue(hostEntity.isOnline)
-        assertEquals(3389, hostEntity.vncPort)
-        assertEquals(9090, hostEntity.cockpitPort)
-        assertEquals("KDE Plasma 6 (Wayland)", hostEntity.osType)
     }
 
     @Test

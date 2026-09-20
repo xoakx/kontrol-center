@@ -24,7 +24,6 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.Send
 import androidx.compose.material.icons.filled.ClearAll
-import androidx.compose.material.icons.filled.History
 import androidx.compose.material.icons.filled.Terminal
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.Icon
@@ -37,6 +36,7 @@ import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -48,7 +48,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
-import com.example.service.TerminalEngine
+import com.example.data.entity.HostEntity
 import com.example.service.TerminalLineType
 import com.example.ui.theme.CyanPrimary
 import com.example.ui.theme.EmeraldSuccess
@@ -57,20 +57,39 @@ import com.example.ui.theme.RoseError
 import com.example.ui.theme.TerminalBlack
 import com.example.ui.theme.TerminalGreen
 import com.example.viewmodel.MainViewModel
+import com.example.viewmodel.TerminalViewModel
 
 @Composable
 fun TerminalScreen(
     viewModel: MainViewModel,
     modifier: Modifier = Modifier
 ) {
-    val terminalEngine = viewModel.terminalEngine
-    val terminalState by terminalEngine.state.collectAsStateWithLifecycle()
+    val terminalViewModel = remember(viewModel) {
+        TerminalViewModel(viewModel.terminalEngine) { viewModel.currentHost.value }
+    }
     val activeHost by viewModel.currentHost.collectAsStateWithLifecycle()
+
+    TerminalScreen(
+        terminalViewModel = terminalViewModel,
+        activeHost = activeHost,
+        modifier = modifier
+    )
+}
+
+@Composable
+fun TerminalScreen(
+    terminalViewModel: TerminalViewModel,
+    activeHost: HostEntity? = null,
+    modifier: Modifier = Modifier
+) {
+    val terminalState by terminalViewModel.terminalState.collectAsStateWithLifecycle()
+    val uiState by terminalViewModel.uiState.collectAsStateWithLifecycle()
+    val isCtrlActive by terminalViewModel.isCtrlActive.collectAsStateWithLifecycle()
     val listState = rememberLazyListState()
 
-    // Auto-scroll to bottom on output change
+    // Auto-scroll to bottom on output change if enabled
     LaunchedEffect(terminalState.lines.size) {
-        if (terminalState.lines.isNotEmpty()) {
+        if (uiState.isAutoScrollEnabled && terminalState.lines.isNotEmpty()) {
             listState.animateScrollToItem(terminalState.lines.size - 1)
         }
     }
@@ -120,7 +139,7 @@ fun TerminalScreen(
                         Spacer(modifier = Modifier.width(8.dp))
                     }
                     IconButton(
-                        onClick = { terminalEngine.clearConsole() },
+                        onClick = { terminalViewModel.clearConsole() },
                         modifier = Modifier.size(28.dp)
                     ) {
                         Icon(
@@ -143,7 +162,7 @@ fun TerminalScreen(
                 .padding(horizontal = 14.dp, vertical = 8.dp)
         ) {
             items(terminalState.lines) { line ->
-                val textColor = when (line.type) {
+                val fallbackColor = when (line.type) {
                     TerminalLineType.INPUT -> CyanPrimary
                     TerminalLineType.OUTPUT -> Color(0xFFE2E8F0)
                     TerminalLineType.SYSTEM -> Color(0xFF94A3B8)
@@ -151,11 +170,11 @@ fun TerminalScreen(
                     TerminalLineType.ERROR -> RoseError
                 }
                 Text(
-                    text = line.text,
+                    text = line.annotatedText,
                     fontFamily = FontFamily.Monospace,
-                    fontSize = 12.sp,
-                    lineHeight = 17.sp,
-                    color = textColor,
+                    fontSize = uiState.fontSizeSp.sp,
+                    lineHeight = (uiState.fontSizeSp + 5).sp,
+                    color = fallbackColor,
                     modifier = Modifier.padding(vertical = 1.dp)
                 )
             }
@@ -184,7 +203,7 @@ fun TerminalScreen(
                     modifier = Modifier
                         .clip(RoundedCornerShape(8.dp))
                         .background(Color(0xFF1E293B))
-                        .clickable { terminalEngine.executeCommand(cmd) }
+                        .clickable { terminalViewModel.executeCommand(cmd) }
                         .padding(horizontal = 10.dp, vertical = 5.dp)
                 ) {
                     Text(
@@ -198,20 +217,25 @@ fun TerminalScreen(
         }
 
         // Termux Accessory Key Bar
-        Row(
+        LazyRow(
             modifier = Modifier
                 .fillMaxWidth()
                 .background(Color(0xFF0A0F1D))
                 .padding(horizontal = 6.dp, vertical = 4.dp),
-            horizontalArrangement = Arrangement.SpaceEvenly
+            horizontalArrangement = Arrangement.spacedBy(6.dp)
         ) {
-            val keys = listOf("ESC", "TAB", "CTRL+C", "UP", "DOWN", "|", "~", "-", "/", "CLEAR")
-            keys.forEach { key ->
+            val keys = listOf("CTRL", "ESC", "TAB", "CTRL+C", "UP", "DOWN", "|", "~", "-", "/", "CLEAR")
+            items(keys) { key ->
+                val isCtrlKey = (key == "CTRL")
+                val isKeyActive = isCtrlKey && isCtrlActive
+                val bgColor = if (isKeyActive) CyanPrimary else Color(0xFF1E293B)
+                val textColor = if (isKeyActive) Color.Black else Color.White
+
                 Surface(
                     shape = RoundedCornerShape(6.dp),
-                    color = Color(0xFF1E293B),
+                    color = bgColor,
                     modifier = Modifier
-                        .clickable { terminalEngine.appendQuickKey(key) }
+                        .clickable { terminalViewModel.sendQuickKey(key) }
                         .testTag("quick_key_$key")
                 ) {
                     Text(
@@ -219,7 +243,7 @@ fun TerminalScreen(
                         fontSize = 11.sp,
                         fontFamily = FontFamily.Monospace,
                         fontWeight = FontWeight.Bold,
-                        color = Color.White,
+                        color = textColor,
                         modifier = Modifier.padding(horizontal = 8.dp, vertical = 6.dp)
                     )
                 }
@@ -236,7 +260,7 @@ fun TerminalScreen(
         ) {
             OutlinedTextField(
                 value = terminalState.currentInput,
-                onValueChange = { terminalEngine.updateInput(it) },
+                onValueChange = { terminalViewModel.updateInput(it) },
                 placeholder = {
                     Text(
                         text = "Enter shell command...",
@@ -252,7 +276,7 @@ fun TerminalScreen(
                     color = Color.White
                 ),
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Send),
-                keyboardActions = KeyboardActions(onSend = { terminalEngine.executeCommand() }),
+                keyboardActions = KeyboardActions(onSend = { terminalViewModel.executeCommand() }),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = CyanPrimary,
                     unfocusedBorderColor = Color(0xFF334155),
@@ -267,7 +291,7 @@ fun TerminalScreen(
             Spacer(modifier = Modifier.width(8.dp))
 
             IconButton(
-                onClick = { terminalEngine.executeCommand() },
+                onClick = { terminalViewModel.executeCommand() },
                 modifier = Modifier
                     .clip(RoundedCornerShape(12.dp))
                     .background(CyanPrimary)

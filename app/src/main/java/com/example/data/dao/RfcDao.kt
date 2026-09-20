@@ -28,4 +28,19 @@ interface RfcDao {
 
     @Query("UPDATE rfc_items SET status = :status, executionLog = :log, executedAt = :executedAt WHERE id = :rfcId")
     suspend fun updateRfcStatus(rfcId: Int, status: String, log: String, executedAt: Long?)
+
+    @Query("SELECT * FROM rfc_items WHERE rfcNumber = :number LIMIT 1")
+    fun getRfcByNumber(number: String): Flow<RfcItemEntity?>
+
+    @Query("SELECT * FROM rfc_items WHERE rfcNumber = :number LIMIT 1")
+    suspend fun getRfcByNumberSync(number: String): RfcItemEntity?
+
+    @Insert(onConflict = OnConflictStrategy.REPLACE)
+    suspend fun insertRfcs(items: List<RfcItemEntity>)
+
+    @Query("UPDATE rfc_items SET status = :status, executionLog = :log, executedAt = :executedAt WHERE rfcNumber = :number")
+    suspend fun updateRfcStatusByNumber(number: String, status: String, log: String, executedAt: Long?)
+
+    @Query("DELETE FROM rfc_items WHERE hostId = :hostId")
+    suspend fun clearRfcsForHost(hostId: Int)
 }

@@ -4,6 +4,7 @@ import com.example.e2e.harness.FakeSshSession
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
+import org.junit.Assert.fail
 import org.junit.Before
 import org.junit.Test
 import java.io.IOException
@@ -100,14 +101,19 @@ class B10_PtyTerminalBoundaryTest {
     @Test
     fun T2_B10_05_terminal_disconnect_during_stream() {
         val out = fakeSshSession.getOutputStream()
-        out.write("initial command".toByteArray(Charsets.UTF_8))
+        val initialCommand = "initial command"
+        out.write(initialCommand.toByteArray(Charsets.UTF_8))
         out.close()
+
+        assertTrue(out.isClosed)
 
         try {
             out.write("command after close".toByteArray(Charsets.UTF_8))
-            // Depending on stream implementation, writing to closed stream throws IOException
+            fail("Expected IOException when writing to closed stream")
         } catch (e: IOException) {
-            assertTrue(true)
+            assertEquals("Stream closed", e.message)
         }
+
+        assertEquals(initialCommand, fakeSshSession.getCapturedInput())
     }
 }

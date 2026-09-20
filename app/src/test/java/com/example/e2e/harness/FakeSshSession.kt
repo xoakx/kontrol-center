@@ -2,6 +2,7 @@ package com.example.e2e.harness
 
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
+import java.io.IOException
 import java.io.InputStream
 import java.io.OutputStream
 import java.nio.charset.StandardCharsets
@@ -13,6 +14,59 @@ import java.nio.charset.StandardCharsets
 class FakeSshSession {
     val capturedOutput = ByteArrayOutputStream()
     private var staticInputBytes = byteArrayOf()
+    private val wrappedOutputStream = ClosableByteArrayOutputStream(capturedOutput)
+
+    /**
+     * Output stream wrapper tracking stream closure and recording outbound session bytes.
+     * Throws [IOException] when write operations are attempted after closure.
+     */
+    class ClosableByteArrayOutputStream(
+        private val underlying: ByteArrayOutputStream = ByteArrayOutputStream()
+    ) : OutputStream() {
+        var isClosed: Boolean = false
+            private set
+
+        private fun checkNotClosed() {
+            if (isClosed) {
+                throw IOException("Stream closed")
+            }
+        }
+
+        override fun write(b: Int) {
+            checkNotClosed()
+            underlying.write(b)
+        }
+
+        override fun write(b: ByteArray) {
+            checkNotClosed()
+            underlying.write(b)
+        }
+
+        override fun write(b: ByteArray, off: Int, len: Int) {
+            checkNotClosed()
+            underlying.write(b, off, len)
+        }
+
+        override fun flush() {
+            if (!isClosed) {
+                underlying.flush()
+            }
+        }
+
+        override fun close() {
+            isClosed = true
+            super.close()
+        }
+
+        fun reset() {
+            isClosed = false
+            underlying.reset()
+        }
+
+        fun toByteArray(): ByteArray = underlying.toByteArray()
+
+        override fun toString(): String = underlying.toString(StandardCharsets.UTF_8.name())
+    }
 
     /**
      * Feeds raw string data into the session's simulated input stream.
@@ -47,8 +101,8 @@ class FakeSshSession {
     /**
      * Returns the OutputStream where outbound bytes are captured.
      */
-    fun getOutputStream(): OutputStream {
-        return capturedOutput
+    fun getOutputStream(): ClosableByteArrayOutputStream {
+        return wrappedOutputStream
     }
 
     /**
@@ -59,10 +113,10 @@ class FakeSshSession {
     }
 
     /**
-     * Clears all stream buffers.
+     * Clears all stream buffers and resets closure state.
      */
     fun clear() {
-        capturedOutput.reset()
+        wrappedOutputStream.reset()
         staticInputBytes = byteArrayOf()
     }
 }

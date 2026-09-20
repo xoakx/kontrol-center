@@ -23,6 +23,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.stateIn
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -111,6 +112,7 @@ class TelemetryRepository(
             _telemetryState.value = response
             Result.success(response)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.w(TAG, "getTelemetry failed: ${e.message}")
             Result.failure(e)
         }
@@ -127,6 +129,7 @@ class TelemetryRepository(
             updateGovernorState(governor)
             Result.success(response)
         } catch (httpEx: Exception) {
+            if (httpEx is kotlinx.coroutines.CancellationException) throw httpEx
             Log.w(TAG, "setCpuGovernor over HTTP failed: ${httpEx.message}. Attempting SSH fallback.")
             val targetHost = host ?: hostProvider?.invoke()
             if (targetHost != null && sshConnectionManager != null) {
@@ -160,6 +163,7 @@ class TelemetryRepository(
             val response = apiService.dispatchAction(DispatchRequest(action = "audio_reanchor"))
             Result.success(response)
         } catch (httpEx: Exception) {
+            if (httpEx is kotlinx.coroutines.CancellationException) throw httpEx
             Log.w(TAG, "reanchorAudioPipeline over HTTP failed: ${httpEx.message}. Attempting SSH fallback.")
             val targetHost = host ?: hostProvider?.invoke()
             if (targetHost != null && sshConnectionManager != null) {
@@ -187,6 +191,7 @@ class TelemetryRepository(
             val response = apiService.dispatchAction(DispatchRequest(action = "sre_sweep"))
             Result.success(response)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Result.failure(e)
         }
     }
@@ -199,14 +204,16 @@ class TelemetryRepository(
             val response = apiService.dispatchAction(DispatchRequest(action = "git_sync"))
             Result.success(response)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Result.failure(e)
         }
     }
 
     private fun updateGovernorState(newGov: String) {
-        val cur = _telemetryState.value ?: return
-        _telemetryState.value = cur.copy(
-            cpu = cur.cpu.copy(governor = newGov)
-        )
+        _telemetryState.update { cur ->
+            cur?.copy(
+                cpu = cur.cpu.copy(governor = newGov)
+            )
+        }
     }
 }

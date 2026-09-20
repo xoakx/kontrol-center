@@ -91,10 +91,26 @@ class SmartHomeRepositoryTest : E2eTestHarness() {
 
     @Test
     fun testControlDevice_togglePurifierPower() = runBlocking {
+        // Populate initial smart home state (initial power is "on")
+        smartHomeRepository.getSmartHome()
+        assertEquals("on", smartHomeRepository.smartHome.value?.airPurifier?.get("levoit_purifier")?.power)
+
+        // togglePurifierPower with turnOn = false calls controlDevice with "turn_off"
         val result = smartHomeRepository.togglePurifierPower(turnOn = false)
         assertTrue(result.isSuccess)
         val resp = result.getOrNull()
         assertNotNull(resp)
         assertTrue(resp?.success == true)
+        assertEquals("off", smartHomeRepository.smartHome.value?.airPurifier?.get("levoit_purifier")?.power)
+
+        // Direct controlDevice with "turn_off" maintains "off"
+        val turnOffResult = smartHomeRepository.controlDevice(category = "air_purifier", id = "levoit_purifier", action = "turn_off")
+        assertTrue(turnOffResult.isSuccess)
+        assertEquals("off", smartHomeRepository.smartHome.value?.airPurifier?.get("levoit_purifier")?.power)
+
+        // Direct controlDevice with "turn_on" updates to "on"
+        val turnOnResult = smartHomeRepository.controlDevice(category = "air_purifier", id = "levoit_purifier", action = "turn_on")
+        assertTrue(turnOnResult.isSuccess)
+        assertEquals("on", smartHomeRepository.smartHome.value?.airPurifier?.get("levoit_purifier")?.power)
     }
 }

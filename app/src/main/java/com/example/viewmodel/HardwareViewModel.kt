@@ -12,6 +12,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class HardwareUiState(
@@ -63,7 +64,7 @@ class HardwareViewModel(
         currentScope.launch {
             smartHomeRepository.smartHome.collect { sh ->
                 if (sh != null) {
-                    _uiState.value = _uiState.value.copy(smartHome = sh)
+                    _uiState.update { it.copy(smartHome = sh) }
                 }
             }
         }
@@ -81,18 +82,20 @@ class HardwareViewModel(
     }
 
     private suspend fun refreshTelemetryInternal() {
-        _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
+        _uiState.update { it.copy(isLoading = true, errorMessage = null) }
         val result = telemetryRepository.getTelemetry()
         result.fold(
             onSuccess = { telem ->
                 processTelemetry(telem)
-                _uiState.value = _uiState.value.copy(isLoading = false)
+                _uiState.update { it.copy(isLoading = false) }
             },
             onFailure = { err ->
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    errorMessage = "Telemetry refresh failed: ${err.message}"
-                )
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        errorMessage = "Telemetry refresh failed: ${err.message}"
+                    )
+                }
             }
         )
     }
@@ -105,12 +108,14 @@ class HardwareViewModel(
         val result = smartHomeRepository.getSmartHome()
         result.fold(
             onSuccess = { sh ->
-                _uiState.value = _uiState.value.copy(smartHome = sh)
+                _uiState.update { it.copy(smartHome = sh) }
             },
             onFailure = { err ->
-                _uiState.value = _uiState.value.copy(
-                    errorMessage = "Smart home refresh failed: ${err.message}"
-                )
+                _uiState.update {
+                    it.copy(
+                        errorMessage = "Smart home refresh failed: ${err.message}"
+                    )
+                }
             }
         )
     }
@@ -119,40 +124,48 @@ class HardwareViewModel(
         val currentGov = _uiState.value.governor
         val nextGov = targetGovernor ?: if (currentGov.equals("performance", ignoreCase = true)) "powersave" else "performance"
 
-        _uiState.value = _uiState.value.copy(isGovernorToggling = true)
+        _uiState.update { it.copy(isGovernorToggling = true) }
         val result = telemetryRepository.setCpuGovernor(nextGov, host)
         result.fold(
             onSuccess = { resp ->
-                _uiState.value = _uiState.value.copy(
-                    isGovernorToggling = false,
-                    governor = nextGov,
-                    userNotice = resp.message ?: "CPU governor changed to '$nextGov'"
-                )
+                _uiState.update {
+                    it.copy(
+                        isGovernorToggling = false,
+                        governor = nextGov,
+                        userNotice = resp.message ?: "CPU governor changed to '$nextGov'"
+                    )
+                }
             },
             onFailure = { err ->
-                _uiState.value = _uiState.value.copy(
-                    isGovernorToggling = false,
-                    errorMessage = "Failed to switch CPU governor: ${err.message}"
-                )
+                _uiState.update {
+                    it.copy(
+                        isGovernorToggling = false,
+                        errorMessage = "Failed to switch CPU governor: ${err.message}"
+                    )
+                }
             }
         )
     }
 
     fun reanchorAudio(host: HostEntity? = null): Job = currentScope.launch {
-        _uiState.value = _uiState.value.copy(isAudioReanchoring = true)
+        _uiState.update { it.copy(isAudioReanchoring = true) }
         val result = telemetryRepository.reanchorAudioPipeline(host)
         result.fold(
             onSuccess = { resp ->
-                _uiState.value = _uiState.value.copy(
-                    isAudioReanchoring = false,
-                    userNotice = resp.message ?: "Audio pipeline re-anchored successfully"
-                )
+                _uiState.update {
+                    it.copy(
+                        isAudioReanchoring = false,
+                        userNotice = resp.message ?: "Audio pipeline re-anchored successfully"
+                    )
+                }
             },
             onFailure = { err ->
-                _uiState.value = _uiState.value.copy(
-                    isAudioReanchoring = false,
-                    errorMessage = "Audio re-anchoring failed: ${err.message}"
-                )
+                _uiState.update {
+                    it.copy(
+                        isAudioReanchoring = false,
+                        errorMessage = "Audio re-anchoring failed: ${err.message}"
+                    )
+                }
             }
         )
     }
@@ -161,11 +174,11 @@ class HardwareViewModel(
         val result = smartHomeRepository.setPurifierFanSpeed(speed)
         result.fold(
             onSuccess = {
-                _uiState.value = _uiState.value.copy(userNotice = "Purifier fan speed set to $speed")
+                _uiState.update { it.copy(userNotice = "Purifier fan speed set to $speed") }
                 refreshSmartHomeInternal()
             },
             onFailure = { err ->
-                _uiState.value = _uiState.value.copy(errorMessage = "Failed to set fan speed: ${err.message}")
+                _uiState.update { it.copy(errorMessage = "Failed to set fan speed: ${err.message}") }
             }
         )
     }
@@ -174,17 +187,17 @@ class HardwareViewModel(
         val result = smartHomeRepository.togglePurifierPower(turnOn)
         result.fold(
             onSuccess = {
-                _uiState.value = _uiState.value.copy(userNotice = "Purifier power toggled")
+                _uiState.update { it.copy(userNotice = "Purifier power toggled") }
                 refreshSmartHomeInternal()
             },
             onFailure = { err ->
-                _uiState.value = _uiState.value.copy(errorMessage = "Failed to toggle purifier: ${err.message}")
+                _uiState.update { it.copy(errorMessage = "Failed to toggle purifier: ${err.message}") }
             }
         )
     }
 
     fun clearNotice() {
-        _uiState.value = _uiState.value.copy(userNotice = null, errorMessage = null)
+        _uiState.update { it.copy(userNotice = null, errorMessage = null) }
     }
 
     private fun processTelemetry(telem: TelemetryResponse) {
@@ -212,21 +225,23 @@ class HardwareViewModel(
         val pAvg = if (pCores.isNotEmpty()) pCores.average().toFloat() else 0f
         val eAvg = if (eCores.isNotEmpty()) eCores.average().toFloat() else 0f
 
-        _uiState.value = _uiState.value.copy(
-            telemetry = telem,
-            governor = telem.cpu.governor,
-            peakGpuTemp = peakGpu,
-            cpuTemp = cpuTemp,
-            isThermalSpike = isSpike,
-            isCriticalThermal = isCritical,
-            npuHealthy = telem.npu.present && telem.npu.service.isNotBlank(),
-            npuDeviceNode = telem.npu.device,
-            npuService = telem.npu.service,
-            perCoreLoads = cores,
-            pCoreLoads = pCores,
-            eCoreLoads = eCores,
-            pCoreAverageLoad = pAvg,
-            eCoreAverageLoad = eAvg
-        )
+        _uiState.update {
+            it.copy(
+                telemetry = telem,
+                governor = telem.cpu.governor,
+                peakGpuTemp = peakGpu,
+                cpuTemp = cpuTemp,
+                isThermalSpike = isSpike,
+                isCriticalThermal = isCritical,
+                npuHealthy = telem.npu.present && telem.npu.service.isNotBlank(),
+                npuDeviceNode = telem.npu.device,
+                npuService = telem.npu.service,
+                perCoreLoads = cores,
+                pCoreLoads = pCores,
+                eCoreLoads = eCores,
+                pCoreAverageLoad = pAvg,
+                eCoreAverageLoad = eAvg
+            )
+        }
     }
 }

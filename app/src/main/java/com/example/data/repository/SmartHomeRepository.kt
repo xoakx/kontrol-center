@@ -16,6 +16,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 
 /**
@@ -47,6 +48,7 @@ class SmartHomeRepository(
             _smartHome.value = response
             Result.success(response)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.w(TAG, "getSmartHome failed: ${e.message}")
             Result.failure(e)
         }
@@ -69,11 +71,19 @@ class SmartHomeRepository(
             val response = apiService.controlSmartHome(request)
             if (id == "levoit_purifier" && action == "set_fan_speed" && value != null) {
                 updatePurifierState { it.copy(fanSpeed = value) }
-            } else if (id == "levoit_purifier" && (action == "toggle_power" || action == "toggle_purifier_power")) {
-                updatePurifierState { it.copy(power = if (it.power == "on") "off" else "on") }
+            } else if (id == "levoit_purifier" && (action == "toggle_power" || action == "toggle_purifier_power" || action == "turn_on" || action == "turn_off")) {
+                updatePurifierState { purifier ->
+                    val newPower = when (action) {
+                        "turn_on" -> "on"
+                        "turn_off" -> "off"
+                        else -> if (purifier.power == "on") "off" else "on"
+                    }
+                    purifier.copy(power = newPower)
+                }
             }
             Result.success(response)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.w(TAG, "controlDevice failed: ${e.message}")
             Result.failure(e)
         }
@@ -90,11 +100,13 @@ class SmartHomeRepository(
     }
 
     private fun updatePurifierState(updater: (AirPurifierDto) -> AirPurifierDto) {
-        val cur = _smartHome.value ?: return
-        val currentPurifier = cur.airPurifier["levoit_purifier"] ?: return
-        val updated = updater(currentPurifier)
-        val newMap = cur.airPurifier.toMutableMap()
-        newMap["levoit_purifier"] = updated
-        _smartHome.value = cur.copy(airPurifier = newMap)
+        _smartHome.update { cur ->
+            if (cur == null) return@update null
+            val currentPurifier = cur.airPurifier["levoit_purifier"] ?: return@update cur
+            val updated = updater(currentPurifier)
+            val newMap = cur.airPurifier.toMutableMap()
+            newMap["levoit_purifier"] = updated
+            cur.copy(airPurifier = newMap)
+        }
     }
 }

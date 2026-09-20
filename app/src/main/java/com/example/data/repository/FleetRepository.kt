@@ -15,6 +15,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
 
 /**
@@ -86,6 +87,7 @@ class FleetRepository(
             _supervisedAgents.value = filtered
             Result.success(response)
         } catch (e: Exception) {
+            if (e is kotlinx.coroutines.CancellationException) throw e
             Log.w(TAG, "getFleetStatus failed over HTTP: ${e.message}")
             Result.failure(e)
         }
@@ -106,6 +108,7 @@ class FleetRepository(
             updateLocalDaemonState(service, action, response.success)
             Result.success(response)
         } catch (httpEx: Exception) {
+            if (httpEx is kotlinx.coroutines.CancellationException) throw httpEx
             Log.w(TAG, "controlAgent failed over HTTP for service '$service': ${httpEx.message}. Attempting SSH fallback.")
             val targetHost = host ?: hostProvider?.invoke()
             if (targetHost != null && sshConnectionManager != null) {
@@ -133,6 +136,7 @@ class FleetRepository(
                         )
                     }
                 } catch (sshEx: Exception) {
+                    if (sshEx is kotlinx.coroutines.CancellationException) throw sshEx
                     Log.e(TAG, "SSH fallback threw exception: ${sshEx.message}", sshEx)
                     return@withContext Result.failure(sshEx)
                 }
@@ -155,30 +159,34 @@ class FleetRepository(
         val isRunning = action != "stop"
         val newState = if (isRunning) "running" else "stopped"
 
-        _agents.value = _agents.value.map { daemon ->
-            if (daemon.service == service || "${daemon.id}.service" == service) {
-                daemon.copy(
-                    status = daemon.status.copy(
-                        active = isRunning,
-                        state = newState,
-                        pid = if (isRunning) daemon.status.pid ?: 10000L else null,
-                        memoryMb = if (isRunning) daemon.status.memoryMb ?: 50.0 else 0.0
+        _agents.update { currentList ->
+            currentList.map { daemon ->
+                if (daemon.service == service || "${daemon.id}.service" == service) {
+                    daemon.copy(
+                        status = daemon.status.copy(
+                            active = isRunning,
+                            state = newState,
+                            pid = if (isRunning) daemon.status.pid ?: 10000L else null,
+                            memoryMb = if (isRunning) daemon.status.memoryMb ?: 50.0 else 0.0
+                        )
                     )
-                )
-            } else daemon
+                } else daemon
+            }
         }
 
-        _supervisedAgents.value = _supervisedAgents.value.map { daemon ->
-            if (daemon.service == service || "${daemon.id}.service" == service) {
-                daemon.copy(
-                    status = daemon.status.copy(
-                        active = isRunning,
-                        state = newState,
-                        pid = if (isRunning) daemon.status.pid ?: 10000L else null,
-                        memoryMb = if (isRunning) daemon.status.memoryMb ?: 50.0 else 0.0
+        _supervisedAgents.update { currentList ->
+            currentList.map { daemon ->
+                if (daemon.service == service || "${daemon.id}.service" == service) {
+                    daemon.copy(
+                        status = daemon.status.copy(
+                            active = isRunning,
+                            state = newState,
+                            pid = if (isRunning) daemon.status.pid ?: 10000L else null,
+                            memoryMb = if (isRunning) daemon.status.memoryMb ?: 50.0 else 0.0
+                        )
                     )
-                )
-            } else daemon
+                } else daemon
+            }
         }
     }
 }

@@ -10,6 +10,7 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 
 data class FleetUiState(
@@ -49,7 +50,7 @@ class FleetViewModel(
     }
 
     private suspend fun refreshInternal() {
-        _uiState.value = _uiState.value.copy(isLoading = true, errorMessage = null)
+        _uiState.update { it.copy(isLoading = true, errorMessage = null) }
         val result = fleetRepository.getFleetStatus()
         result.fold(
             onSuccess = { response ->
@@ -59,13 +60,15 @@ class FleetViewModel(
                     response.agents
                 }
                 updateFromAgents(filtered)
-                _uiState.value = _uiState.value.copy(isLoading = false)
+                _uiState.update { it.copy(isLoading = false) }
             },
             onFailure = { error ->
-                _uiState.value = _uiState.value.copy(
-                    isLoading = false,
-                    errorMessage = "Failed to load fleet status: ${error.message}"
-                )
+                _uiState.update {
+                    it.copy(
+                        isLoading = false,
+                        errorMessage = "Failed to load fleet status: ${error.message}"
+                    )
+                }
             }
         )
     }
@@ -80,27 +83,31 @@ class FleetViewModel(
         executeDaemonAction(service, "start", host)
 
     fun clearNotice() {
-        _uiState.value = _uiState.value.copy(userNotice = null)
+        _uiState.update { it.copy(userNotice = null) }
     }
 
     private fun executeDaemonAction(service: String, action: String, host: HostEntity?): Job =
         currentScope.launch {
-            _uiState.value = _uiState.value.copy(actionInProgress = service)
+            _uiState.update { it.copy(actionInProgress = service) }
             val result = fleetRepository.controlAgent(service = service, action = action, host = host)
             result.fold(
                 onSuccess = { resp ->
-                    _uiState.value = _uiState.value.copy(
-                        actionInProgress = null,
-                        userNotice = "${resp.service ?: service} ${resp.action ?: action} succeeded."
-                    )
+                    _uiState.update {
+                        it.copy(
+                            actionInProgress = null,
+                            userNotice = "${resp.service ?: service} ${resp.action ?: action} succeeded."
+                        )
+                    }
                     // Refresh status after mutation directly without re-launching Job and calling join()
                     refreshInternal()
                 },
                 onFailure = { err ->
-                    _uiState.value = _uiState.value.copy(
-                        actionInProgress = null,
-                        errorMessage = "Action $action failed for $service: ${err.message}"
-                    )
+                    _uiState.update {
+                        it.copy(
+                            actionInProgress = null,
+                            errorMessage = "Action $action failed for $service: ${err.message}"
+                        )
+                    }
                 }
             )
         }
@@ -116,12 +123,14 @@ class FleetViewModel(
             else -> "OPTIMAL"
         }
 
-        _uiState.value = _uiState.value.copy(
-            daemons = agents,
-            activeCount = active,
-            totalCount = total,
-            failedCount = failed,
-            overallHealth = health
-        )
+        _uiState.update {
+            it.copy(
+                daemons = agents,
+                activeCount = active,
+                totalCount = total,
+                failedCount = failed,
+                overallHealth = health
+            )
+        }
     }
 }

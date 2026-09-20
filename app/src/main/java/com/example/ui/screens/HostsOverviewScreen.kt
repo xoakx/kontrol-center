@@ -22,16 +22,21 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Add
+import androidx.compose.material.icons.filled.ArrowForward
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Check
 import androidx.compose.material.icons.filled.Close
 import androidx.compose.material.icons.filled.DisplaySettings
 import androidx.compose.material.icons.filled.GraphicEq
+import androidx.compose.material.icons.filled.Layers
 import androidx.compose.material.icons.filled.Memory
 import androidx.compose.material.icons.filled.Mouse
 import androidx.compose.material.icons.filled.OpenInBrowser
 import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
+import androidx.compose.material.icons.filled.Shield
 import androidx.compose.material.icons.filled.Terminal
+import androidx.compose.material.icons.filled.VpnKey
 import androidx.compose.material3.Button
 import androidx.compose.material3.Card
 import androidx.compose.material3.CardDefaults
@@ -66,14 +71,26 @@ import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.data.entity.HostEntity
 import com.example.ui.components.ControlCenterTile
 import com.example.ui.components.HostSummaryCard
+import com.example.ui.theme.AmberWarning
+import com.example.ui.theme.CyanPrimary
 import com.example.ui.theme.EmeraldSuccess
 import com.example.ui.theme.FrostedGlassBorder
+import com.example.ui.theme.IndigoSecondary
+import com.example.ui.theme.RoseError
 import com.example.viewmodel.AppTab
+import com.example.viewmodel.ExecutiveDashboardSummary
 import com.example.viewmodel.MainViewModel
+import com.example.viewmodel.OverviewViewModel
 
 @Composable
 fun HostsOverviewScreen(
     viewModel: MainViewModel,
+    overviewViewModel: OverviewViewModel = viewModel.overviewViewModel,
+    onNavigateToHardware: () -> Unit = { viewModel.selectTab(AppTab.HARDWARE) },
+    onNavigateToFleet: () -> Unit = { viewModel.selectTab(AppTab.FLEET) },
+    onNavigateToNetSec: () -> Unit = { viewModel.selectTab(AppTab.NETSEC) },
+    onNavigateToTerminal: () -> Unit = { viewModel.selectTab(AppTab.TERMINAL) },
+    onNavigateToAgent: () -> Unit = { viewModel.selectTab(AppTab.AGENT) },
     modifier: Modifier = Modifier
 ) {
     val hosts by viewModel.hostsList.collectAsStateWithLifecycle()
@@ -81,6 +98,8 @@ fun HostsOverviewScreen(
     val activeHost by viewModel.currentHost.collectAsStateWithLifecycle()
     val audioState by viewModel.audioRelayEngine.state.collectAsStateWithLifecycle()
     val snippets by viewModel.snippetList.collectAsStateWithLifecycle()
+    val overviewState by overviewViewModel.uiState.collectAsStateWithLifecycle()
+    val summary = overviewState.summary
 
     Box(modifier = modifier.fillMaxSize()) {
         LazyColumn(
@@ -140,6 +159,140 @@ fun HostsOverviewScreen(
                             )
                         }
                     }
+                }
+            }
+
+            // Executive Health Overview Header & Status Badge
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            text = "EXECUTIVE OVERVIEW",
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 1.sp,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant
+                        )
+                        Spacer(modifier = Modifier.width(8.dp))
+                        val overallColor = when (summary.overallStatus) {
+                            "OPTIMAL" -> EmeraldSuccess
+                            "WARNING" -> AmberWarning
+                            "CRITICAL" -> RoseError
+                            else -> Color.Gray
+                        }
+                        Surface(
+                            shape = RoundedCornerShape(8.dp),
+                            color = overallColor.copy(alpha = 0.15f),
+                            border = androidx.compose.foundation.BorderStroke(1.dp, overallColor.copy(alpha = 0.5f)),
+                            modifier = Modifier.testTag("overall_health_badge")
+                        ) {
+                            Row(
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                                verticalAlignment = Alignment.CenterVertically
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(6.dp)
+                                        .clip(CircleShape)
+                                        .background(overallColor)
+                                )
+                                Spacer(modifier = Modifier.width(5.dp))
+                                Text(
+                                    text = summary.overallStatus,
+                                    fontSize = 10.sp,
+                                    fontWeight = FontWeight.Bold,
+                                    color = overallColor
+                                )
+                            }
+                        }
+                    }
+
+                    IconButton(
+                        onClick = { overviewViewModel.refresh() },
+                        modifier = Modifier
+                            .size(32.dp)
+                            .testTag("executive_refresh_button")
+                    ) {
+                        Icon(
+                            imageVector = Icons.Default.Refresh,
+                            contentDescription = "Refresh Executive Health",
+                            tint = CyanPrimary,
+                            modifier = Modifier.size(18.dp)
+                        )
+                    }
+                }
+            }
+
+            // The 4 Primary Executive Overview Cards (2x2 Grid for <5-Second Readability)
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    ExecutiveHealthCard(
+                        title = "SYSTEM HEALTH",
+                        headline = summary.systemHealthCard,
+                        subtext = "Dual RTX 5060 Ti • Ultra 7 • NPU",
+                        badgeText = if (summary.systemHealthCard.contains("Optimal")) "OPTIMAL" else if (summary.overallStatus == "OFFLINE") "OFFLINE" else "ATTENTION",
+                        badgeColor = if (summary.systemHealthCard.contains("Optimal")) EmeraldSuccess else if (summary.overallStatus == "OFFLINE") Color.Gray else AmberWarning,
+                        accentColor = CyanPrimary,
+                        icon = Icons.Default.Memory,
+                        drilldownLabel = "Silicon Sensors ->",
+                        testTag = "card_system_health",
+                        onClick = onNavigateToHardware,
+                        modifier = Modifier.weight(1f)
+                    )
+                    ExecutiveHealthCard(
+                        title = "FLEET DAEMONS",
+                        headline = summary.fleetDaemonsCard,
+                        subtext = "12 Supervised Fleet Agents",
+                        badgeText = if (summary.fleetDaemonsCard.contains("Active")) "SUPERVISED" else "OFFLINE",
+                        badgeColor = if (summary.fleetDaemonsCard.contains("12/12") || summary.fleetDaemonsCard.contains("11/12")) EmeraldSuccess else AmberWarning,
+                        accentColor = IndigoSecondary,
+                        icon = Icons.Default.Layers,
+                        drilldownLabel = "Manage Fleet ->",
+                        testTag = "card_fleet_daemons",
+                        onClick = onNavigateToFleet,
+                        modifier = Modifier.weight(1f)
+                    )
+                }
+            }
+
+            item {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
+                ) {
+                    ExecutiveHealthCard(
+                        title = "SECURITY & SIEM",
+                        headline = summary.securitySiemCard,
+                        subtext = "CrowdSec LAPI • Suricata 8",
+                        badgeText = if (summary.securitySiemCard.contains("Offline")) "OFFLINE" else if (summary.securitySiemCard.contains("0 Alerts")) "SECURE" else "PROTECTED",
+                        badgeColor = if (summary.securitySiemCard.contains("Offline")) Color.Gray else RoseError,
+                        accentColor = RoseError,
+                        icon = Icons.Default.Shield,
+                        drilldownLabel = "SIEM & Unban ->",
+                        testTag = "card_security_siem",
+                        onClick = onNavigateToNetSec,
+                        modifier = Modifier.weight(1f)
+                    )
+                    ExecutiveHealthCard(
+                        title = "WORKSTATION MESH",
+                        headline = summary.connectedWorkstationsCard,
+                        subtext = "${activeHost?.name ?: "fml"} (${activeHost?.address ?: "100.111.123.93"})",
+                        badgeText = if (activeHost?.isOnline == true) "ONLINE" else "OFFLINE",
+                        badgeColor = if (activeHost?.isOnline == true) EmeraldSuccess else Color.Gray,
+                        accentColor = EmeraldSuccess,
+                        icon = Icons.Default.VpnKey,
+                        drilldownLabel = "Refresh Mesh ->",
+                        testTag = "card_connected_workstations",
+                        onClick = { overviewViewModel.refresh() },
+                        modifier = Modifier.weight(1f)
+                    )
                 }
             }
 
@@ -535,3 +688,122 @@ fun AddHostDialog(
         }
     }
 }
+
+@Composable
+fun ExecutiveHealthCard(
+    title: String,
+    headline: String,
+    subtext: String,
+    badgeText: String,
+    badgeColor: Color,
+    accentColor: Color,
+    icon: androidx.compose.ui.graphics.vector.ImageVector,
+    drilldownLabel: String,
+    testTag: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier
+) {
+    Card(
+        shape = RoundedCornerShape(20.dp),
+        colors = CardDefaults.cardColors(
+            containerColor = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.45f)
+        ),
+        border = androidx.compose.foundation.BorderStroke(1.dp, FrostedGlassBorder),
+        modifier = modifier
+            .clip(RoundedCornerShape(20.dp))
+            .clickable { onClick() }
+            .testTag(testTag)
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(14.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
+        ) {
+            // Card Top Row
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Row(
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .size(28.dp)
+                            .clip(CircleShape)
+                            .background(accentColor.copy(alpha = 0.15f)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Icon(
+                            imageVector = icon,
+                            contentDescription = title,
+                            tint = accentColor,
+                            modifier = Modifier.size(16.dp)
+                        )
+                    }
+                    Text(
+                        text = title,
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant
+                    )
+                }
+
+                Surface(
+                    shape = RoundedCornerShape(6.dp),
+                    color = badgeColor.copy(alpha = 0.15f),
+                    border = androidx.compose.foundation.BorderStroke(1.dp, badgeColor.copy(alpha = 0.4f))
+                ) {
+                    Text(
+                        text = badgeText,
+                        fontSize = 9.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = badgeColor,
+                        modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                    )
+                }
+            }
+
+            // Headline Text
+            Text(
+                text = headline,
+                fontSize = 14.sp,
+                fontWeight = FontWeight.Bold,
+                color = MaterialTheme.colorScheme.onSurface,
+                maxLines = 2
+            )
+
+            // Subtext
+            Text(
+                text = subtext,
+                fontSize = 11.sp,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1
+            )
+
+            // Bottom Drilldown Prompt
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                Text(
+                    text = drilldownLabel,
+                    fontSize = 10.sp,
+                    fontWeight = FontWeight.SemiBold,
+                    color = accentColor
+                )
+                Icon(
+                    imageVector = Icons.Default.ArrowForward,
+                    contentDescription = null,
+                    tint = accentColor,
+                    modifier = Modifier.size(12.dp)
+                )
+            }
+        }
+    }
+}
+

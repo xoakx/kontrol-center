@@ -27,6 +27,8 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.activity.compose.BackHandler
+import androidx.compose.material.icons.filled.ArrowBack
 import androidx.compose.material.icons.filled.AutoAwesome
 import androidx.compose.material.icons.filled.Cast
 import androidx.compose.material.icons.filled.CheckCircle
@@ -67,8 +69,11 @@ import androidx.compose.ui.unit.sp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import com.example.ui.screens.AgentRfcScreen
 import com.example.ui.screens.DisplayInputScreen
+import com.example.ui.screens.FleetDaemonsScreen
+import com.example.ui.screens.HardwareSensorsScreen
 import com.example.ui.screens.HostsOverviewScreen
 import com.example.ui.screens.HubConnectScreen
+import com.example.ui.screens.NetSecSiemScreen
 import com.example.ui.screens.ProvisioningModal
 import com.example.ui.screens.TerminalScreen
 import com.example.ui.theme.CyanPrimary
@@ -103,6 +108,13 @@ fun HostManagerApp(viewModel: MainViewModel) {
 
   val snackbarHostState = remember { SnackbarHostState() }
 
+  // Hardware/gesture back navigation returns from drill-downs to OVERVIEW
+  if (uiState.selectedTab in listOf(AppTab.FLEET, AppTab.HARDWARE, AppTab.NETSEC)) {
+    BackHandler {
+      viewModel.selectTab(AppTab.OVERVIEW)
+    }
+  }
+
   LaunchedEffect(uiState.quickNotice) {
     uiState.quickNotice?.let { notice ->
       snackbarHostState.showSnackbar(notice)
@@ -114,7 +126,6 @@ fun HostManagerApp(viewModel: MainViewModel) {
     modifier = Modifier.fillMaxSize(),
     snackbarHost = { SnackbarHost(snackbarHostState) },
     topBar = {
-      // Dynamic Host Status Header Bar
       Surface(
         color = MaterialTheme.colorScheme.surface.copy(alpha = 0.95f),
         border = androidx.compose.foundation.BorderStroke(1.dp, FrostedGlassBorder),
@@ -122,52 +133,50 @@ fun HostManagerApp(viewModel: MainViewModel) {
           .fillMaxWidth()
           .statusBarsPadding()
       ) {
-        Row(
-          modifier = Modifier
-            .padding(horizontal = 16.dp, vertical = 10.dp)
-            .fillMaxWidth(),
-          horizontalArrangement = Arrangement.SpaceBetween,
-          verticalAlignment = Alignment.CenterVertically
-        ) {
-          Row(verticalAlignment = Alignment.CenterVertically) {
-            Box(
-              modifier = Modifier
-                .size(10.dp)
-                .clip(CircleShape)
-                .background(if (activeHost?.isOnline == true) EmeraldSuccess else Color.Gray)
-            )
-            Spacer(modifier = Modifier.width(8.dp))
-            Column {
-              Text(
-                text = activeHost?.name ?: "No Host Selected",
-                fontWeight = FontWeight.Bold,
-                fontSize = 15.sp,
-                color = MaterialTheme.colorScheme.onSurface
-              )
-              Text(
-                text = "${activeHost?.address ?: "127.0.0.1"} • Key Auth",
-                fontFamily = FontFamily.Monospace,
-                fontSize = 11.sp,
-                color = MaterialTheme.colorScheme.onSurfaceVariant
-              )
-            }
-          }
-
-          Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (audioState.isStreaming) {
-              Surface(
-                shape = RoundedCornerShape(8.dp),
-                color = EmeraldSuccess.copy(alpha = 0.15f),
-                border = androidx.compose.foundation.BorderStroke(1.dp, EmeraldSuccess.copy(alpha = 0.4f))
+        if (uiState.selectedTab in listOf(AppTab.FLEET, AppTab.HARDWARE, AppTab.NETSEC)) {
+          // Drill-down Top Navigation Bar with Back Button
+          Row(
+            modifier = Modifier
+              .padding(horizontal = 8.dp, vertical = 6.dp)
+              .fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              IconButton(
+                onClick = { viewModel.selectTab(AppTab.OVERVIEW) },
+                modifier = Modifier.testTag("top_bar_back_button")
               ) {
-                Row(
-                  modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
-                  verticalAlignment = Alignment.CenterVertically
-                ) {
-                  Icon(imageVector = Icons.Default.GraphicEq, contentDescription = null, tint = EmeraldSuccess, modifier = Modifier.size(12.dp))
-                  Spacer(modifier = Modifier.width(4.dp))
-                  Text("Audio 48k", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = EmeraldSuccess)
-                }
+                Icon(
+                  imageVector = Icons.Default.ArrowBack,
+                  contentDescription = "Back to Overview",
+                  tint = MaterialTheme.colorScheme.onSurface
+                )
+              }
+              Spacer(modifier = Modifier.width(4.dp))
+              Column {
+                Text(
+                  text = when (uiState.selectedTab) {
+                    AppTab.FLEET -> "Fleet Daemons"
+                    AppTab.HARDWARE -> "Hardware & Silicon Sensors"
+                    AppTab.NETSEC -> "Security & SIEM Stack"
+                    else -> "Overview"
+                  },
+                  fontWeight = FontWeight.Bold,
+                  fontSize = 16.sp,
+                  color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                  text = when (uiState.selectedTab) {
+                    AppTab.FLEET -> "12 Supervised Arcade Agents • systemd"
+                    AppTab.HARDWARE -> "Dual RTX 5060 Ti • Intel Ultra 7 • NPU"
+                    AppTab.NETSEC -> "Suricata 8 • CrowdSec • Tetragon • nftables"
+                    else -> ""
+                  },
+                  fontFamily = FontFamily.Monospace,
+                  fontSize = 11.sp,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
               }
             }
 
@@ -175,17 +184,85 @@ fun HostManagerApp(viewModel: MainViewModel) {
               shape = RoundedCornerShape(8.dp),
               color = CyanPrimary.copy(alpha = 0.15f),
               border = androidx.compose.foundation.BorderStroke(1.dp, CyanPrimary.copy(alpha = 0.4f)),
-              modifier = Modifier.clickable {
-                viewModel.setProvisioningModalVisible(true)
-              }
+              modifier = Modifier
+                .padding(end = 8.dp)
+                .clickable { viewModel.selectTab(AppTab.OVERVIEW) }
             ) {
               Row(
                 modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
                 verticalAlignment = Alignment.CenterVertically
               ) {
-                Icon(imageVector = Icons.Default.Key, contentDescription = null, tint = CyanPrimary, modifier = Modifier.size(13.dp))
-                Spacer(modifier = Modifier.width(4.dp))
-                Text("1-Click SSH", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = CyanPrimary)
+                Text("Overview", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = CyanPrimary)
+              }
+            }
+          }
+        } else {
+          // Dynamic Host Status Header Bar
+          Row(
+            modifier = Modifier
+              .padding(horizontal = 16.dp, vertical = 10.dp)
+              .fillMaxWidth(),
+            horizontalArrangement = Arrangement.SpaceBetween,
+            verticalAlignment = Alignment.CenterVertically
+          ) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+              Box(
+                modifier = Modifier
+                  .size(10.dp)
+                  .clip(CircleShape)
+                  .background(if (activeHost?.isOnline == true) EmeraldSuccess else Color.Gray)
+              )
+              Spacer(modifier = Modifier.width(8.dp))
+              Column {
+                Text(
+                  text = activeHost?.name ?: "No Host Selected",
+                  fontWeight = FontWeight.Bold,
+                  fontSize = 15.sp,
+                  color = MaterialTheme.colorScheme.onSurface
+                )
+                Text(
+                  text = "${activeHost?.address ?: "127.0.0.1"} • Key Auth",
+                  fontFamily = FontFamily.Monospace,
+                  fontSize = 11.sp,
+                  color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
+              }
+            }
+
+            Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+              if (audioState.isStreaming) {
+                Surface(
+                  shape = RoundedCornerShape(8.dp),
+                  color = EmeraldSuccess.copy(alpha = 0.15f),
+                  border = androidx.compose.foundation.BorderStroke(1.dp, EmeraldSuccess.copy(alpha = 0.4f))
+                ) {
+                  Row(
+                    modifier = Modifier.padding(horizontal = 6.dp, vertical = 3.dp),
+                    verticalAlignment = Alignment.CenterVertically
+                  ) {
+                    Icon(imageVector = Icons.Default.GraphicEq, contentDescription = null, tint = EmeraldSuccess, modifier = Modifier.size(12.dp))
+                    Spacer(modifier = Modifier.width(4.dp))
+                    Text("Audio 48k", fontSize = 10.sp, fontWeight = FontWeight.Bold, color = EmeraldSuccess)
+                  }
+                }
+              }
+
+              Surface(
+                shape = RoundedCornerShape(8.dp),
+                color = CyanPrimary.copy(alpha = 0.15f),
+                border = androidx.compose.foundation.BorderStroke(1.dp, CyanPrimary.copy(alpha = 0.4f)),
+                modifier = Modifier.clickable {
+                  viewModel.setProvisioningModalVisible(true)
+                }
+              ) {
+                Row(
+                  modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp),
+                  verticalAlignment = Alignment.CenterVertically
+                ) {
+                  Icon(imageVector = Icons.Default.Key, contentDescription = null, tint = CyanPrimary, modifier = Modifier.size(13.dp))
+                  Spacer(modifier = Modifier.width(4.dp))
+                  Text("1-Click SSH", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = CyanPrimary)
+                }
               }
             }
           }
@@ -199,8 +276,14 @@ fun HostManagerApp(viewModel: MainViewModel) {
         tonalElevation = 8.dp,
         modifier = Modifier.border(1.dp, FrostedGlassBorder)
       ) {
+        val isOverviewSelected = uiState.selectedTab in listOf(
+          AppTab.OVERVIEW,
+          AppTab.FLEET,
+          AppTab.HARDWARE,
+          AppTab.NETSEC
+        )
         NavigationBarItem(
-          selected = uiState.selectedTab == AppTab.OVERVIEW,
+          selected = isOverviewSelected,
           onClick = { viewModel.selectTab(AppTab.OVERVIEW) },
           icon = { Icon(imageVector = Icons.Default.Layers, contentDescription = "Overview") },
           label = { Text("Overview", fontSize = 10.sp) },
@@ -281,7 +364,18 @@ fun HostManagerApp(viewModel: MainViewModel) {
     ) {
       Crossfade(targetState = uiState.selectedTab, label = "tab_crossfade") { tab ->
         when (tab) {
-          AppTab.OVERVIEW -> HostsOverviewScreen(viewModel = viewModel)
+          AppTab.OVERVIEW -> HostsOverviewScreen(
+            viewModel = viewModel,
+            overviewViewModel = viewModel.overviewViewModel,
+            onNavigateToHardware = { viewModel.selectTab(AppTab.HARDWARE) },
+            onNavigateToFleet = { viewModel.selectTab(AppTab.FLEET) },
+            onNavigateToNetSec = { viewModel.selectTab(AppTab.NETSEC) },
+            onNavigateToTerminal = { viewModel.selectTab(AppTab.TERMINAL) },
+            onNavigateToAgent = { viewModel.selectTab(AppTab.AGENT) }
+          )
+          AppTab.FLEET -> FleetDaemonsScreen(viewModel = viewModel.fleetViewModel)
+          AppTab.HARDWARE -> HardwareSensorsScreen(viewModel = viewModel.hardwareViewModel)
+          AppTab.NETSEC -> NetSecSiemScreen(viewModel = viewModel.netSecViewModel)
           AppTab.TERMINAL -> TerminalScreen(viewModel = viewModel)
           AppTab.DISPLAY -> DisplayInputScreen(viewModel = viewModel)
           AppTab.CONNECT -> HubConnectScreen(viewModel = viewModel)

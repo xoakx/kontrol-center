@@ -24,7 +24,7 @@ import kotlinx.coroutines.launch
         CommandSnippetEntity::class,
         ClipboardItemEntity::class
     ],
-    version = 2,
+    version = 3,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
@@ -37,14 +37,14 @@ abstract class AppDatabase : RoomDatabase() {
         @Volatile
         private var INSTANCE: AppDatabase? = null
 
-        fun getDatabase(context: Context, scope: CoroutineScope): AppDatabase {
+        fun getDatabase(context: Context, scope: CoroutineScope? = null): AppDatabase {
             return INSTANCE ?: synchronized(this) {
                 val instance = Room.databaseBuilder(
                     context.applicationContext,
                     AppDatabase::class.java,
                     "host_manager_database"
                 )
-                    .fallbackToDestructiveMigration(dropAllTables = true)
+                    .addMigrations(MIGRATION_1_2, MIGRATION_2_3)
                     .build()
                 INSTANCE = instance
                 instance

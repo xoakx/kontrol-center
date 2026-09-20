@@ -158,27 +158,30 @@ class NetworkMeshManagerImpl(
     private val probeMutex = Mutex()
     private val immediateCheckChannel = Channel<Unit>(Channel.CONFLATED)
     private var monitorJob: Job? = null
+    private var probeCount = 0L
 
     private var registeredContext: Context? = null
     private var connectivityManager: ConnectivityManager? = null
 
-    private val networkCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) {
-            Log.i(TAG, "Network became available ($network) - triggering instant mesh re-probe")
-            triggerImmediateCheck()
-        }
+    private val networkCallback by lazy {
+        object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                Log.i(TAG, "Network became available ($network) - triggering instant mesh re-probe")
+                triggerImmediateCheck()
+            }
 
-        override fun onLost(network: Network) {
-            Log.i(TAG, "Network lost ($network) - triggering instant mesh re-probe")
-            triggerImmediateCheck()
-        }
+            override fun onLost(network: Network) {
+                Log.i(TAG, "Network lost ($network) - triggering instant mesh re-probe")
+                triggerImmediateCheck()
+            }
 
-        override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
-            val hasVpn = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
-            val hasWifi = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
-            val hasCell = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
-            Log.d(TAG, "Network capabilities changed: VPN=$hasVpn, WiFi=$hasWifi, Cell=$hasCell")
-            triggerImmediateCheck()
+            override fun onCapabilitiesChanged(network: Network, networkCapabilities: NetworkCapabilities) {
+                val hasVpn = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_VPN)
+                val hasWifi = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_WIFI)
+                val hasCell = networkCapabilities.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR)
+                Log.d(TAG, "Network capabilities changed: VPN=$hasVpn, WiFi=$hasWifi, Cell=$hasCell")
+                triggerImmediateCheck()
+            }
         }
     }
 
@@ -199,7 +202,7 @@ class NetworkMeshManagerImpl(
         if (current.status != ConnectionStatus.OFFLINE && current.activeBaseUrl.isNotBlank()) {
             return current.activeBaseUrl
         }
-        val newState = probeEndpoints()
+        val newState = probeEndpoints(force = false)
         if (newState.status != ConnectionStatus.OFFLINE && newState.activeBaseUrl.isNotBlank()) {
             return newState.activeBaseUrl
         }
@@ -209,55 +212,78 @@ class NetworkMeshManagerImpl(
     /**
      * Executes non-blocking TCP socket probes against Tailscale and LAN endpoints.
      * Zero-Trust Tailscale takes strict priority.
+     *
+     * @param force When true (default for manual/test calls), always conducts socket probes.
+     *              When false (used by resolveActiveBaseUrl), applies double-checked locking
+     *              to prevent thundering herds under concurrent invocation.
      */
-    suspend fun probeEndpoints(): EndpointState = probeMutex.withLock {
-        val now = System.currentTimeMillis()
+    suspend fun probeEndpoints(force: Boolean = true): EndpointState {
+        val requestProbeCount = probeCount
+        return probeMutex.withLock {
+            val current = _endpointState.value
+            val now = System.currentTimeMillis()
 
-        // 1. Probe Primary Zero-Trust Mesh (Tailscale)
-        val tsResult = socketProber.probe(tailscaleIp, port, probeTimeoutMs)
-        if (tsResult.isReachable) {
+            if (!force) {
+                // Double-checked locking Check 2a: another coroutine completed a probe while we queued
+                if (probeCount > requestProbeCount) {
+                    return current
+                }
+                // Double-checked locking Check 2b: cached state is fresh (< 1000ms) and active
+                if (now - current.lastChecked < 1000L && current.status != ConnectionStatus.OFFLINE) {
+                    return current
+                }
+            }
+
+            // 1. Probe Primary Zero-Trust Mesh (Tailscale)
+            val tsResult = socketProber.probe(tailscaleIp, port, probeTimeoutMs)
+            if (tsResult.isReachable) {
+                probeCount++
+                val newState = EndpointState(
+                    status = ConnectionStatus.CONNECTED_TAILSCALE,
+                    activeBaseUrl = "http://$tailscaleIp:$port",
+                    activeIp = tailscaleIp,
+                    latencyMs = tsResult.latencyMs,
+                    lastChecked = now
+                )
+                _endpointState.value = newState
+                return newState
+            }
+
+            // 2. Probe Fallback Local LAN Subnet
+            val lanResult = socketProber.probe(lanIp, port, probeTimeoutMs)
+            if (lanResult.isReachable) {
+                probeCount++
+                val newState = EndpointState(
+                    status = ConnectionStatus.CONNECTED_LAN,
+                    activeBaseUrl = "http://$lanIp:$port",
+                    activeIp = lanIp,
+                    latencyMs = lanResult.latencyMs,
+                    lastChecked = now
+                )
+                _endpointState.value = newState
+                return newState
+            }
+
+            // 3. Both failed -> OFFLINE
+            probeCount++
             val newState = EndpointState(
-                status = ConnectionStatus.CONNECTED_TAILSCALE,
-                activeBaseUrl = "http://$tailscaleIp:$port",
-                activeIp = tailscaleIp,
-                latencyMs = tsResult.latencyMs,
+                status = ConnectionStatus.OFFLINE,
+                activeBaseUrl = "",
+                activeIp = "",
+                latencyMs = -1L,
                 lastChecked = now
             )
             _endpointState.value = newState
             return newState
         }
-
-        // 2. Probe Fallback Local LAN Subnet
-        val lanResult = socketProber.probe(lanIp, port, probeTimeoutMs)
-        if (lanResult.isReachable) {
-            val newState = EndpointState(
-                status = ConnectionStatus.CONNECTED_LAN,
-                activeBaseUrl = "http://$lanIp:$port",
-                activeIp = lanIp,
-                latencyMs = lanResult.latencyMs,
-                lastChecked = now
-            )
-            _endpointState.value = newState
-            return newState
-        }
-
-        // 3. Both failed -> OFFLINE
-        val newState = EndpointState(
-            status = ConnectionStatus.OFFLINE,
-            activeBaseUrl = "",
-            activeIp = "",
-            latencyMs = -1L,
-            lastChecked = now
-        )
-        _endpointState.value = newState
-        return newState
     }
 
     /**
      * Calculates exponential backoff with +/- 15% random jitter.
      */
     fun computeBackoffDelay(attempt: Int): Long {
-        val exponential = (baseBackoffMs * Math.pow(backoffMultiplier, attempt.toDouble())).toLong()
+        val safeAttempt = attempt.coerceIn(0, 30)
+        val exponential = (baseBackoffMs * Math.pow(backoffMultiplier, safeAttempt.toDouble())).toLong()
         val capped = minOf(exponential, maxBackoffMs)
         val minJitter = 1.0 - jitterFactor
         val maxJitter = 1.0 + jitterFactor
@@ -294,6 +320,14 @@ class NetworkMeshManagerImpl(
     }
 
     /**
+     * Stops the background monitoring loop.
+     */
+    fun stopMonitoring() {
+        monitorJob?.cancel()
+        monitorJob = null
+    }
+
+    /**
      * Registers Android ConnectivityManager callback for network changes.
      */
     fun registerNetworkCallback(context: Context) {
@@ -316,7 +350,9 @@ class NetworkMeshManagerImpl(
      */
     fun unregisterNetworkCallback() {
         try {
-            connectivityManager?.unregisterNetworkCallback(networkCallback)
+            if (registeredContext != null) {
+                connectivityManager?.unregisterNetworkCallback(networkCallback)
+            }
         } catch (e: Exception) {
             Log.w(TAG, "Error unregistering NetworkCallback: ${e.message}")
         } finally {
@@ -329,7 +365,9 @@ class NetworkMeshManagerImpl(
      * Cleans up background jobs and unregisters callbacks.
      */
     fun close() {
-        unregisterNetworkCallback()
-        monitorJob?.cancel()
+        if (registeredContext != null) {
+            unregisterNetworkCallback()
+        }
+        stopMonitoring()
     }
 }

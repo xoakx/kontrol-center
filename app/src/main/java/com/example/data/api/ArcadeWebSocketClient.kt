@@ -1,6 +1,7 @@
 package com.example.data.api
 
 import com.squareup.moshi.Moshi
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -27,8 +28,13 @@ class ArcadeWebSocketClient(
     private val okHttpClient: OkHttpClient,
     private val moshi: Moshi,
     private val endpointUrlProvider: () -> String,
-    private val scope: CoroutineScope
+    private val scope: CoroutineScope,
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
 ) {
+    companion object {
+        private const val TAG = "ArcadeWebSocketClient"
+    }
+
     private val _connectionState = MutableStateFlow(WsConnectionStatus.DISCONNECTED)
     val connectionState: StateFlow<WsConnectionStatus> = _connectionState.asStateFlow()
 
@@ -49,6 +55,8 @@ class ArcadeWebSocketClient(
 
     fun start() {
         shouldReconnect.set(true)
+        reconnectJob?.cancel()
+        backoffMs = 1000L
         connect()
     }
 
@@ -60,23 +68,58 @@ class ArcadeWebSocketClient(
         _connectionState.value = WsConnectionStatus.DISCONNECTED
     }
 
+    fun reconnectImmediately() {
+        if (!shouldReconnect.get()) return
+        start()
+    }
+
     private fun connect() {
         if (_connectionState.value == WsConnectionStatus.CONNECTED ||
             _connectionState.value == WsConnectionStatus.CONNECTING) return
 
-        _connectionState.value = if (backoffMs > 1000L) WsConnectionStatus.RECONNECTING else WsConnectionStatus.CONNECTING
-
-        val baseUrl = endpointUrlProvider().trim()
-        val wsUrl = if (baseUrl.startsWith("http://")) {
-            baseUrl.replace("http://", "ws://").trimEnd('/') + "/ws"
-        } else if (baseUrl.startsWith("https://")) {
-            baseUrl.replace("https://", "wss://").trimEnd('/') + "/ws"
-        } else {
-            "ws://$baseUrl:8899/ws"
+        val baseUrl = try {
+            endpointUrlProvider().trim()
+        } catch (e: Exception) {
+            logError("endpointUrlProvider threw exception: ${e.message}", e)
+            ""
         }
 
-        val request = Request.Builder().url(wsUrl).build()
-        activeWebSocket = okHttpClient.newWebSocket(request, createWebSocketListener())
+        // Offline guard: prevents building invalid "ws://:8899/ws" URL
+        if (baseUrl.isBlank()) {
+            _connectionState.value = WsConnectionStatus.DISCONNECTED
+            triggerReconnect()
+            return
+        }
+
+        _connectionState.value = if (backoffMs > 1000L) WsConnectionStatus.RECONNECTING else WsConnectionStatus.CONNECTING
+
+        try {
+            val wsBase = when {
+                baseUrl.startsWith("http://") -> baseUrl.replace("http://", "ws://")
+                baseUrl.startsWith("https://") -> baseUrl.replace("https://", "wss://")
+                baseUrl.startsWith("ws://") || baseUrl.startsWith("wss://") -> baseUrl
+                baseUrl.contains(":") -> "ws://$baseUrl"
+                else -> "ws://$baseUrl:8899"
+            }.trimEnd('/')
+            val wsUrl = if (wsBase.endsWith("/ws")) wsBase else "$wsBase/ws"
+
+            val request = Request.Builder().url(wsUrl).build()
+            activeWebSocket?.cancel()
+            activeWebSocket = okHttpClient.newWebSocket(request, createWebSocketListener())
+        } catch (e: Exception) {
+            logError("Failed to initialize WebSocket for '$baseUrl': ${e.message}", e)
+            _connectionState.value = WsConnectionStatus.FAILED
+            triggerReconnect()
+        }
+    }
+
+    private fun logError(message: String, throwable: Throwable? = null) {
+        try {
+            android.util.Log.e(TAG, message, throwable)
+        } catch (_: Throwable) {
+            System.err.println("[$TAG] $message")
+            throwable?.printStackTrace(System.err)
+        }
     }
 
     private fun createWebSocketListener() = object : WebSocketListener() {
@@ -131,7 +174,7 @@ class ArcadeWebSocketClient(
     private fun triggerReconnect() {
         if (!shouldReconnect.get()) return
         reconnectJob?.cancel()
-        reconnectJob = scope.launch(Dispatchers.IO) {
+        reconnectJob = scope.launch(ioDispatcher) {
             delay(backoffMs)
             backoffMs = (backoffMs * 2).coerceAtMost(maxBackoffMs)
             connect()

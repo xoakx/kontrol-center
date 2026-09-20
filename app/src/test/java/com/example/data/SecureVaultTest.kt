@@ -23,6 +23,7 @@ class SecureVaultTest {
 
     @Before
     fun setup() {
+        com.example.e2e.harness.FakeAndroidKeyStoreProvider.install()
         context = ApplicationProvider.getApplicationContext()
         vault = SecureVault(context, "test_vault_prefs")
         vault.clearAll()

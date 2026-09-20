@@ -8,6 +8,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
@@ -15,6 +16,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadows.ShadowNetwork
 import org.robolectric.annotation.Config
 
 @RunWith(RobolectricTestRunner::class)
@@ -67,7 +69,7 @@ class NetworkMeshManagerRobolectricTest {
 
         manager.registerNetworkCallback(context)
         manager.startMonitoring()
-        testScope.advanceUntilIdle()
+        testScope.runCurrent()
 
         assertEquals(ConnectionStatus.CONNECTED_TAILSCALE, manager.endpointState.value.status)
 
@@ -77,10 +79,12 @@ class NetworkMeshManagerRobolectricTest {
         prober.setRule("192.168.1.161", ProbeResult(isReachable = true, latencyMs = 6L))
 
         // Trigger onLost or onCapabilitiesChanged
-        callback.onLost(shadowCm.activeNetwork ?: shadowCm.allNetworks.firstOrNull() ?: shadowOf(cm).activeNetwork)
-        testScope.advanceUntilIdle()
+        val network = cm.activeNetwork ?: cm.allNetworks.firstOrNull() ?: ShadowNetwork.newInstance(1)
+        callback.onLost(network)
+        testScope.runCurrent()
 
         assertEquals(ConnectionStatus.CONNECTED_LAN, manager.endpointState.value.status)
+        manager.stopMonitoring()
         manager.close()
     }
 }

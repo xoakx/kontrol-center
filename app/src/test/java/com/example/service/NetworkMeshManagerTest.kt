@@ -5,6 +5,7 @@ import kotlinx.coroutines.test.StandardTestDispatcher
 import kotlinx.coroutines.test.TestScope
 import kotlinx.coroutines.test.advanceTimeBy
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.runCurrent
 import kotlinx.coroutines.test.runTest
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -257,13 +258,14 @@ class NetworkMeshManagerTest {
         )
 
         manager.startMonitoring()
-        advanceUntilIdle() // Initial probe runs -> OFFLINE, enters 10s delay
+        runCurrent() // Initial probe runs -> OFFLINE, enters 10s delay
 
         val initialProbeCount = prober.invocationHistory.size
         assertTrue(initialProbeCount >= 2)
 
         // Advance only 1 second (delay is 10s, so timer has not expired)
         advanceTimeBy(1000)
+        runCurrent()
         assertEquals(initialProbeCount, prober.invocationHistory.size)
 
         // Switch prober to UP
@@ -271,12 +273,13 @@ class NetworkMeshManagerTest {
 
         // Trigger immediate check!
         manager.triggerImmediateCheck()
-        advanceUntilIdle()
+        runCurrent()
 
         // Should have probed immediately without waiting for remaining 9 seconds
         assertTrue(prober.invocationHistory.size > initialProbeCount)
         assertEquals(ConnectionStatus.CONNECTED_TAILSCALE, manager.endpointState.value.status)
 
+        manager.stopMonitoring()
         manager.close()
     }
 }

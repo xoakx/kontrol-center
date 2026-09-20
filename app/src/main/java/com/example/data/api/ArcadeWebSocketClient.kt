@@ -40,6 +40,7 @@ class ArcadeWebSocketClient(
 
     private val _telemetryFlow = MutableStateFlow<TelemetryResponse?>(null)
     val telemetryFlow: StateFlow<TelemetryResponse?> = _telemetryFlow.asStateFlow()
+    val telemetryEvents: StateFlow<TelemetryResponse?> get() = _telemetryFlow.asStateFlow()
 
     private val _eventFlow = MutableSharedFlow<ArcadeEventBusMessage>(extraBufferCapacity = 64)
     val eventFlow: SharedFlow<ArcadeEventBusMessage> = _eventFlow.asSharedFlow()

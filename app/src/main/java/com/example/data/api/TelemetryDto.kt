@@ -66,3 +66,17 @@ data class NetworkTelemetryDto(
     @Json(name = "congestion_control") val congestionControl: String = "bbr",
     @Json(name = "qdisc") val qdisc: String = "fq"
 )
+
+@JsonClass(generateAdapter = true)
+data class DispatchRequest(
+    @Json(name = "action") val action: String
+)
+
+@JsonClass(generateAdapter = true)
+data class DispatchResponse(
+    @Json(name = "success") val success: Boolean,
+    @Json(name = "action") val action: String? = null,
+    @Json(name = "message") val message: String? = null,
+    @Json(name = "output") val output: String? = null
+)
+

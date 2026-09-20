@@ -45,4 +45,10 @@ interface ArcadeApiService {
 
     @POST("/api/netsec/crowdsec/unban")
     suspend fun unbanIp(@Body body: UnbanRequest): UnbanResponse
+
+    @POST("/api/dispatch")
+    suspend fun dispatchAction(@Body body: DispatchRequest): DispatchResponse
+
+    @POST("/api/smarthome/control")
+    suspend fun controlSmartHome(@Body body: SmartHomeControlRequest): SmartHomeControlResponse
 }

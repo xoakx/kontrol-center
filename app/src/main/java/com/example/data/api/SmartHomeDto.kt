@@ -59,3 +59,21 @@ data class AirPurifierDto(
     @Json(name = "filter_life_pct") val filterLifePct: Int = 100,
     @Json(name = "display_light") val displayLight: String = "dim"
 )
+
+@JsonClass(generateAdapter = true)
+data class SmartHomeControlRequest(
+    @Json(name = "category") val category: String? = null,
+    @Json(name = "id") val id: String? = null,
+    @Json(name = "device") val device: String? = null,
+    @Json(name = "action") val action: String,
+    @Json(name = "value") val value: Int? = null
+)
+
+@JsonClass(generateAdapter = true)
+data class SmartHomeControlResponse(
+    @Json(name = "success") val success: Boolean,
+    @Json(name = "device") val device: String? = null,
+    @Json(name = "action") val action: String? = null,
+    @Json(name = "message") val message: String? = null
+)
+

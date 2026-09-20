@@ -22,6 +22,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.withContext
+import java.io.IOException
 
 /**
  * NetSecRepository coordinates network security and host SIEM telemetry across:
@@ -176,8 +177,8 @@ class NetSecRepository(
             val overviewResult = getNetSecOverview()
             getSuricataAlerts(50)
             getCrowdSecDecisions()
-            try { getTetragonStatus() } catch (_: Exception) {}
-            try { getFirewallStatus() } catch (_: Exception) {}
+            getTetragonStatus()
+            getFirewallStatus()
             overviewResult
         } catch (e: Exception) {
             if (e is CancellationException) throw e
@@ -203,42 +204,53 @@ class NetSecRepository(
             val response = apiService.unbanIp(request)
             if (response.success) {
                 applyOptimisticUnban(trimmedIp)
+                Result.success(response)
+            } else {
+                Log.w(TAG, "unbanIp API returned success=false for '$trimmedIp': ${response.message}. Attempting SSH fallback.")
+                executeSshUnban(trimmedIp, host, IOException(response.message ?: "Unban rejected"))
             }
-            Result.success(response)
         } catch (httpEx: Exception) {
             if (httpEx is CancellationException) throw httpEx
             Log.w(TAG, "unbanIp failed over HTTP for '$trimmedIp': ${httpEx.message}. Attempting SSH fallback.")
-
-            val targetHost = host ?: hostProvider?.invoke()
-            if (targetHost != null && (sshCommandExecutor != null || sshConnectionManager != null)) {
-                try {
-                    val cmd = "sudo cscli decisions delete -i $trimmedIp"
-                    val sshResult = sshCommandExecutor?.invoke(targetHost, cmd)
-                        ?: sshConnectionManager!!.executeCommand(targetHost, cmd)
-                    if (sshResult.isSuccess) {
-                        val fallbackResponse = UnbanResponse(
-                            success = true,
-                            action = "delete",
-                            ip = trimmedIp,
-                            output = sshResult.stdout.trim(),
-                            message = "Decision for $trimmedIp deleted via SSH fallback"
-                        )
-                        applyOptimisticUnban(trimmedIp)
-                        return@withContext Result.success(fallbackResponse)
-                    } else {
-                        Log.e(TAG, "SSH fallback unban failed: ${sshResult.stderr}")
-                        return@withContext Result.failure(
-                            Exception("Arcade HTTP and SSH fallback both failed. SSH stderr: ${sshResult.stderr}", httpEx)
-                        )
-                    }
-                } catch (sshEx: Exception) {
-                    if (sshEx is CancellationException) throw sshEx
-                    Log.e(TAG, "SSH fallback threw exception: ${sshEx.message}", sshEx)
-                    return@withContext Result.failure(sshEx)
-                }
-            }
-            Result.failure(httpEx)
+            executeSshUnban(trimmedIp, host, httpEx)
         }
+    }
+
+    private suspend fun executeSshUnban(
+        trimmedIp: String,
+        host: HostEntity?,
+        initialError: Throwable
+    ): Result<UnbanResponse> {
+        val targetHost = host ?: hostProvider?.invoke()
+        if (targetHost != null && (sshCommandExecutor != null || sshConnectionManager != null)) {
+            try {
+                val flag = if (trimmedIp.contains("/")) "-r" else "-i"
+                val command = "sudo cscli decisions delete $flag $trimmedIp"
+                val sshResult = sshCommandExecutor?.invoke(targetHost, command)
+                    ?: sshConnectionManager!!.executeCommand(targetHost, command)
+                if (sshResult.isSuccess) {
+                    val fallbackResponse = UnbanResponse(
+                        success = true,
+                        action = "delete",
+                        ip = trimmedIp,
+                        output = sshResult.stdout.trim(),
+                        message = "Decision for $trimmedIp deleted via SSH fallback"
+                    )
+                    applyOptimisticUnban(trimmedIp)
+                    return Result.success(fallbackResponse)
+                } else {
+                    Log.e(TAG, "SSH fallback unban failed: ${sshResult.stderr}")
+                    return Result.failure(
+                        Exception("Arcade HTTP and SSH fallback both failed. SSH stderr: ${sshResult.stderr}", initialError)
+                    )
+                }
+            } catch (sshEx: Exception) {
+                if (sshEx is CancellationException) throw sshEx
+                Log.e(TAG, "SSH fallback threw exception: ${sshEx.message}", sshEx)
+                return Result.failure(sshEx)
+            }
+        }
+        return Result.failure(initialError)
     }
 
     /**

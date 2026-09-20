@@ -225,22 +225,32 @@ class NetSecViewModel(
         val result = repository.unbanIp(trimmed, host)
         result.fold(
             onSuccess = { resp ->
-                val notice = if (resp.message != null && resp.message.contains(trimmed)) {
-                    resp.message
-                } else if (resp.message != null) {
-                    "${resp.message} for $trimmed"
+                if (resp.success) {
+                    val notice = if (resp.message != null && resp.message.contains(trimmed)) {
+                        resp.message
+                    } else if (resp.message != null) {
+                        "${resp.message} for $trimmed"
+                    } else {
+                        "Successfully unbanned $trimmed"
+                    }
+                    _uiState.update {
+                        it.copy(
+                            unbanInProgressIp = null,
+                            isUnbanningIp = null,
+                            crowdSecDecisions = repository.crowdSecDecisions.value,
+                            overview = repository.overview.value,
+                            overallHealth = evaluateOverallHealth(repository.overview.value, it.suricataAlerts),
+                            userNotice = notice
+                        )
+                    }
                 } else {
-                    "IP $trimmed unbanned successfully"
-                }
-                _uiState.update {
-                    it.copy(
-                        unbanInProgressIp = null,
-                        isUnbanningIp = null,
-                        crowdSecDecisions = repository.crowdSecDecisions.value,
-                        overview = repository.overview.value,
-                        overallHealth = evaluateOverallHealth(repository.overview.value, it.suricataAlerts),
-                        userNotice = notice
-                    )
+                    _uiState.update {
+                        it.copy(
+                            unbanInProgressIp = null,
+                            isUnbanningIp = null,
+                            errorMessage = resp.message ?: "Failed to unban $trimmed"
+                        )
+                    }
                 }
             },
             onFailure = { err ->

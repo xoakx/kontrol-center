@@ -14,6 +14,8 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.annotation.Config
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 @RunWith(RobolectricTestRunner::class)
 @Config(sdk = [34])
@@ -138,12 +140,45 @@ class NetSecViewModelTest : E2eTestHarness() {
     fun testUnbanIp_inProgressState() = runBlocking {
         viewModel.refresh().join()
 
+        val inFlightLatch = CountDownLatch(1)
+        val proceedLatch = CountDownLatch(1)
+        dispatcher.overrideResponse("/api/netsec/crowdsec/unban") { req ->
+            inFlightLatch.countDown()
+            proceedLatch.await(5, TimeUnit.SECONDS)
+            dispatcher.createResponse(req, 200, """{"success": true, "message": "Decision deleted"}""")
+        }
+
+        val ipToUnban = "209.99.190.113"
+        val job = viewModel.unbanIp(ipToUnban)
+
+        assertTrue("Expected inFlightLatch to be counted down", inFlightLatch.await(5, TimeUnit.SECONDS))
+
+        val inFlightState = viewModel.uiState.value
+        assertEquals(ipToUnban, inFlightState.unbanInProgressIp)
+        assertEquals(ipToUnban, inFlightState.isUnbanningIp)
+
+        proceedLatch.countDown()
+        job.join()
+
+        val finalState = viewModel.uiState.value
+        assertNull(finalState.unbanInProgressIp)
+        assertNull(finalState.isUnbanningIp)
+    }
+
+    @Test(timeout = 10000)
+    fun testUnbanIp_unsuccessfulResponse_setsErrorMessage() = runBlocking {
+        viewModel.refresh().join()
+
+        dispatcher.setResponse("/api/netsec/crowdsec/unban", 200, """{"success": false, "message": "Decision not found"}""")
+
         val ipToUnban = "209.99.190.113"
         viewModel.unbanIp(ipToUnban).join()
 
         val state = viewModel.uiState.value
         assertNull(state.unbanInProgressIp)
-        assertNull(state.isUnbanningIp)
+        assertNull(state.userNotice)
+        assertNotNull(state.errorMessage)
+        assertTrue(state.errorMessage?.contains("Decision not found") == true)
     }
 
     @Test(timeout = 10000)

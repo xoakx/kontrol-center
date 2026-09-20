@@ -300,7 +300,7 @@ class M3_AdversarialStressTest : E2eTestHarness() {
         val result = repo.unbanIp(cidr)
 
         assertTrue(result.isSuccess)
-        assertEquals("sudo cscli decisions delete -i $cidr", executedCommands.firstOrNull())
+        assertEquals("sudo cscli decisions delete -r $cidr", executedCommands.firstOrNull())
     }
 
     @Test(timeout = 10000)

@@ -1,7 +1,9 @@
 package com.example.repository
 
 import com.example.data.api.ArcadeApiService
+import com.example.data.api.FirewallStatusResponse
 import com.example.data.api.NetSecOverviewResponse
+import com.example.data.api.TetragonStatusResponse
 import com.example.data.api.UnbanRequest
 import com.example.data.api.UnbanResponse
 import com.example.data.entity.HostEntity
@@ -268,5 +270,128 @@ class NetSecRepositoryTest : E2eTestHarness() {
 
         val notFound = netSecRepository.searchAlerts("non_existent_payload_12345")
         assertEquals(0, notFound.size)
+    }
+
+    @Test
+    fun testUnbanIp_apiReturnsSuccessFalse_triggersSshFallback() = runBlocking {
+        dispatcher.setResponse("/api/netsec/crowdsec/unban", 200, """{"success": false, "message": "Decision not found"}""")
+
+        val targetHost = HostEntity(
+            id = 1,
+            name = "fml",
+            address = "100.111.123.93",
+            sshPort = 22,
+            username = "kms",
+            sshPrivateKey = "fake_rsa_key"
+        )
+
+        var executedSshCmd: String? = null
+        val repoWithSsh = NetSecRepository(
+            apiService = apiService,
+            hostProvider = { targetHost },
+            sshCommandExecutor = { _, cmd ->
+                executedSshCmd = cmd
+                SshCommandResult(exitCode = 0, stdout = "1 decision(s) deleted", stderr = "")
+            }
+        )
+
+        repoWithSsh.getCrowdSecDecisions()
+        assertEquals(2, repoWithSsh.crowdSecDecisions.value.size)
+
+        val ipToUnban = "209.99.190.113"
+        val result = repoWithSsh.unbanIp(ipToUnban)
+        assertTrue(result.isSuccess)
+        val response = result.getOrNull()
+        assertNotNull(response)
+        assertTrue(response?.success == true)
+        assertTrue(response?.message?.contains("SSH fallback") == true)
+        assertEquals("sudo cscli decisions delete -i $ipToUnban", executedSshCmd)
+
+        // Verify evicted
+        assertEquals(1, repoWithSsh.crowdSecDecisions.value.size)
+    }
+
+    @Test
+    fun testUnbanIp_apiReturnsSuccessFalse_noSshHost_returnsFailure() = runBlocking {
+        dispatcher.setResponse("/api/netsec/crowdsec/unban", 200, """{"success": false, "message": "Decision not found"}""")
+
+        val result = netSecRepository.unbanIp("209.99.190.113")
+        assertFalse(result.isSuccess)
+        assertTrue(result.isFailure)
+        val ex = result.exceptionOrNull()
+        assertTrue(ex is IOException)
+        assertTrue(ex?.message?.contains("Decision not found") == true)
+    }
+
+    @Test
+    fun testUnbanIp_cidrRange_usesRangeFlagInSshFallback() = runBlocking {
+        dispatcher.setResponse("/api/netsec/crowdsec/unban", 503, """{"error": "CrowdSec LAPI busy"}""")
+
+        val targetHost = HostEntity(
+            id = 1,
+            name = "fml",
+            address = "100.111.123.93",
+            sshPort = 22,
+            username = "kms",
+            sshPrivateKey = "fake_rsa_key"
+        )
+
+        var executedSshCmd: String? = null
+        val repoWithSsh = NetSecRepository(
+            apiService = apiService,
+            hostProvider = { targetHost },
+            sshCommandExecutor = { _, cmd ->
+                executedSshCmd = cmd
+                SshCommandResult(exitCode = 0, stdout = "1 decision(s) deleted", stderr = "")
+            }
+        )
+
+        val cidrToUnban = "198.51.100.0/24"
+        val result = repoWithSsh.unbanIp(cidrToUnban)
+        assertTrue(result.isSuccess)
+        val response = result.getOrNull()
+        assertNotNull(response)
+        assertTrue(response?.success == true)
+        assertEquals("sudo cscli decisions delete -r $cidrToUnban", executedSshCmd)
+    }
+
+    @Test
+    fun testRefreshAll_cancellationExceptionInTetragon_rethrows() {
+        var caughtCancellation = false
+        try {
+            runBlocking {
+                val cancellingService = object : ArcadeApiService by apiService {
+                    override suspend fun getTetragonStatus(): TetragonStatusResponse {
+                        throw CancellationException("Simulated coroutine cancellation in Tetragon")
+                    }
+                }
+                val repo = NetSecRepository(apiService = cancellingService)
+                repo.refreshAll()
+            }
+        } catch (e: CancellationException) {
+            caughtCancellation = true
+            assertTrue(e.message?.contains("Simulated") == true)
+        }
+        assertTrue("CancellationException from Tetragon should have been rethrown out of refreshAll", caughtCancellation)
+    }
+
+    @Test
+    fun testRefreshAll_cancellationExceptionInFirewall_rethrows() {
+        var caughtCancellation = false
+        try {
+            runBlocking {
+                val cancellingService = object : ArcadeApiService by apiService {
+                    override suspend fun getFirewallStatus(): FirewallStatusResponse {
+                        throw CancellationException("Simulated coroutine cancellation in Firewall")
+                    }
+                }
+                val repo = NetSecRepository(apiService = cancellingService)
+                repo.refreshAll()
+            }
+        } catch (e: CancellationException) {
+            caughtCancellation = true
+            assertTrue(e.message?.contains("Simulated") == true)
+        }
+        assertTrue("CancellationException from Firewall should have been rethrown out of refreshAll", caughtCancellation)
     }
 }

@@ -41,6 +41,23 @@ class InteractiveShellSession(
         }
     }
 
+    fun sendBytes(bytes: ByteArray) {
+        try {
+            outputStream.write(bytes)
+            outputStream.flush()
+        } catch (e: Exception) {
+            Log.e("InteractiveShell", "Failed to write bytes to SSH shell: ${e.message}")
+        }
+    }
+
+    fun setPtySize(cols: Int, rows: Int) {
+        try {
+            channel.setPtySize(cols, rows, 0, 0)
+        } catch (e: Exception) {
+            Log.w("InteractiveShell", "Error setting PTY size: ${e.message}")
+        }
+    }
+
     fun close() {
         try {
             inputStream.close()

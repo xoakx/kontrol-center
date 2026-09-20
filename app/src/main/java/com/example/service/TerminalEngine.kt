@@ -1,6 +1,7 @@
 package com.example.service
 
 import android.util.Log
+import androidx.compose.ui.text.AnnotatedString
 import com.example.data.entity.HostEntity
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
@@ -17,6 +18,7 @@ import java.nio.charset.StandardCharsets
 data class TerminalLine(
     val id: Long = System.nanoTime(),
     val text: String,
+    val annotatedText: AnnotatedString = AnnotatedString(text),
     val type: TerminalLineType = TerminalLineType.OUTPUT
 )
 
@@ -39,12 +41,47 @@ data class TerminalState(
     val commandHistory: List<String> = emptyList()
 )
 
+class LineCursorBuffer {
+    private val sb = StringBuilder()
+    private var cursor = 0
+
+    fun append(ch: Char) {
+        if (cursor < sb.length) {
+            sb.setCharAt(cursor, ch)
+        } else {
+            sb.append(ch)
+        }
+        cursor++
+    }
+
+    fun carriageReturn() {
+        cursor = 0
+    }
+
+    fun toStringAndClear(): String {
+        val result = sb.toString()
+        sb.clear()
+        cursor = 0
+        return result
+    }
+
+    fun isNotEmpty(): Boolean = sb.isNotEmpty()
+    fun asString(): String = sb.toString()
+    fun clear() {
+        sb.clear()
+        cursor = 0
+    }
+}
+
 class TerminalEngine(
     private val scope: CoroutineScope,
-    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO
+    private val ioDispatcher: CoroutineDispatcher = Dispatchers.IO,
+    val maxBufferLines: Int = 5000,
+    private val mainDispatcher: CoroutineDispatcher = Dispatchers.Main
 ) {
     companion object {
         private const val TAG = "TerminalEngine"
+        const val DEFAULT_MAX_LINES = 5000
     }
 
     private val _state = MutableStateFlow(TerminalState())
@@ -53,6 +90,9 @@ class TerminalEngine(
     private var activeShell: InteractiveShellSession? = null
     private var readJob: Job? = null
     private var currentHost: HostEntity? = null
+
+    private val pendingLines = mutableListOf<TerminalLine>()
+    private var lastFlushTime = 0L
 
     init {
         val initialBanner = listOf(
@@ -86,7 +126,7 @@ class TerminalEngine(
                 val shell = SshConnectionManager.openInteractiveShell(host, cols = 100, rows = 35, overridePassword = overridePassword)
                 activeShell = shell
 
-                withContext(Dispatchers.Main) {
+                withContext(mainDispatcher) {
                     _state.value = _state.value.copy(
                         isConnected = true,
                         isExecuting = false,
@@ -100,7 +140,7 @@ class TerminalEngine(
                 startReadingShellOutput(shell.inputStream)
             } catch (e: Exception) {
                 Log.e(TAG, "SSH connection error: ${e.message}", e)
-                withContext(Dispatchers.Main) {
+                withContext(mainDispatcher) {
                     _state.value = _state.value.copy(
                         isConnected = false,
                         isExecuting = false,
@@ -116,8 +156,9 @@ class TerminalEngine(
 
     private fun startReadingShellOutput(inputStream: InputStream) {
         readJob = scope.launch(ioDispatcher) {
-            val buffer = ByteArray(4096)
-            val lineBuffer = StringBuilder()
+            val buffer = ByteArray(8192)
+            val lineBuffer = LineCursorBuffer()
+            var pendingCr = false
 
             try {
                 while (isActive) {
@@ -125,46 +166,102 @@ class TerminalEngine(
                     if (bytesRead == -1) break
 
                     val text = String(buffer, 0, bytesRead, StandardCharsets.UTF_8)
-                    // Process incoming characters
                     for (ch in text) {
-                        if (ch == '\n') {
-                            val cleanLine = stripAnsiCodes(lineBuffer.toString())
-                            if (cleanLine.isNotEmpty()) {
-                                appendOutputLine(cleanLine)
+                        if (pendingCr) {
+                            if (ch == '\n') {
+                                val line = lineBuffer.toStringAndClear()
+                                if (line.isNotEmpty()) {
+                                    enqueueOutputLine(line)
+                                }
+                                pendingCr = false
+                            } else {
+                                lineBuffer.carriageReturn()
+                                if (ch == '\r') {
+                                    pendingCr = true
+                                } else {
+                                    lineBuffer.append(ch)
+                                    pendingCr = false
+                                }
                             }
-                            lineBuffer.clear()
-                        } else if (ch != '\r') {
+                        } else if (ch == '\r') {
+                            pendingCr = true
+                        } else if (ch == '\n') {
+                            val line = lineBuffer.toStringAndClear()
+                            if (line.isNotEmpty()) {
+                                enqueueOutputLine(line)
+                            }
+                        } else {
                             lineBuffer.append(ch)
                         }
                     }
 
-                    // If remaining buffer has prompt or interactive text
-                    if (lineBuffer.isNotEmpty() && (lineBuffer.endsWith("$ ") || lineBuffer.endsWith("# ") || lineBuffer.endsWith("> "))) {
-                        val prompt = stripAnsiCodes(lineBuffer.toString())
-                        withContext(Dispatchers.Main) {
-                            _state.value = _state.value.copy(promptString = prompt)
+                    // Flush batch if stream paused or reached threshold
+                    val avail = try { inputStream.available() } catch (_: Exception) { 0 }
+                    if (avail == 0 || pendingLinesCount() >= 50 || System.currentTimeMillis() - lastFlushTime >= 50L) {
+                        flushPendingLines()
+                    }
+
+                    // If remaining buffer has interactive prompt
+                    if (lineBuffer.isNotEmpty() && avail == 0) {
+                        val currentStr = lineBuffer.asString()
+                        if (currentStr.endsWith("$ ") || currentStr.endsWith("# ") || currentStr.endsWith("> ")) {
+                            val prompt = AnsiParser.stripAnsi(currentStr)
+                            withContext(mainDispatcher) {
+                                _state.value = _state.value.copy(promptString = prompt)
+                            }
+                            lineBuffer.clear()
+                        } else if (currentStr.endsWith(": ") || currentStr.endsWith("? ")) {
+                            enqueueOutputLine(currentStr)
+                            flushPendingLines()
+                            lineBuffer.clear()
                         }
-                        lineBuffer.clear()
                     }
                 }
             } catch (e: Exception) {
                 if (isActive) {
-                    appendOutputLine("Session stream closed: ${e.message}", TerminalLineType.SYSTEM)
+                    enqueueOutputLine("Session stream closed: ${e.message}", TerminalLineType.SYSTEM)
+                    flushPendingLines()
                 }
+            } finally {
+                flushPendingLines()
             }
         }
     }
 
-    private fun stripAnsiCodes(str: String): String {
-        return str.replace(Regex("\u001B\\[[;?0-9]*[a-zA-Z]"), "")
+    private fun pendingLinesCount(): Int {
+        synchronized(pendingLines) {
+            return pendingLines.size
+        }
     }
 
-    private fun appendOutputLine(text: String, type: TerminalLineType = TerminalLineType.OUTPUT) {
-        scope.launch(Dispatchers.Main) {
-            val line = TerminalLine(text = text, type = type)
-            _state.value = _state.value.copy(
-                lines = (_state.value.lines + line).takeLast(1000)
-            )
+    private fun enqueueOutputLine(rawText: String, type: TerminalLineType = TerminalLineType.OUTPUT) {
+        val clean = AnsiParser.stripAnsi(rawText)
+        val annotated = AnsiParser.parseAnsiToAnnotatedString(rawText)
+        val line = TerminalLine(text = clean, annotatedText = annotated, type = type)
+        synchronized(pendingLines) {
+            pendingLines.add(line)
+        }
+    }
+
+    private suspend fun flushPendingLines() {
+        val toFlush: List<TerminalLine>
+        synchronized(pendingLines) {
+            if (pendingLines.isEmpty()) return
+            toFlush = ArrayList(pendingLines)
+            pendingLines.clear()
+            lastFlushTime = System.currentTimeMillis()
+        }
+        withContext(mainDispatcher) {
+            val currentLines = _state.value.lines
+            val newLines = (currentLines + toFlush).takeLast(maxBufferLines)
+            _state.value = _state.value.copy(lines = newLines)
+        }
+    }
+
+    fun appendOutputLine(text: String, type: TerminalLineType = TerminalLineType.OUTPUT) {
+        enqueueOutputLine(text, type)
+        scope.launch(mainDispatcher) {
+            flushPendingLines()
         }
     }
 
@@ -199,7 +296,7 @@ class TerminalEngine(
 
         val inputLine = TerminalLine(text = "${_state.value.promptString}$trimmed", type = TerminalLineType.INPUT)
         _state.value = _state.value.copy(
-            lines = _state.value.lines + inputLine,
+            lines = (_state.value.lines + inputLine).takeLast(maxBufferLines),
             currentInput = "",
             commandHistory = _state.value.commandHistory + trimmed
         )
@@ -230,7 +327,23 @@ class TerminalEngine(
         }
     }
 
+    fun setPtySize(cols: Int, rows: Int) {
+        activeShell?.setPtySize(cols, rows)
+    }
+
+    fun sendBytes(bytes: ByteArray) {
+        activeShell?.sendBytes(bytes)
+    }
+
+    fun sendCtrlKey(char: Char) {
+        val ctrlCode = (char.uppercaseChar().code - '@'.code).toChar()
+        activeShell?.sendInput(ctrlCode.toString())
+    }
+
     fun clearConsole() {
+        synchronized(pendingLines) {
+            pendingLines.clear()
+        }
         _state.value = _state.value.copy(lines = emptyList())
     }
 }
